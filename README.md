@@ -40,21 +40,9 @@ TRPO (PPO's predecessor) required complex conjugate gradient optimization. PPO a
 
 ### 📍 Where to find these in the code
 
-| Innovation | Location |
-|------------|----------|
-| **Clipped objective** | [`ppo-agent.js` lines 114-120](js/ppo/ppo-agent.js) |
-| **Multiple epochs** | [`ppo-agent.js` line 66](js/ppo/ppo-agent.js): `for (let epoch = 0; epoch < EPOCHS_PER_UPDATE...)` |
-| **ε (clip range)** | [`config.js`](js/config.js): `CLIP_EPSILON: 0.1` |
-| **K (epochs)** | [`config.js`](js/config.js): `EPOCHS_PER_UPDATE: 10` |
+The **clipped surrogate objective** is implemented in [`js/ppo/ppo-agent.js`](js/ppo/ppo-agent.js) — look for the `_updateBatch` method where it computes `ratio`, `clippedRatio`, and takes the `minimum` of the two surrogate terms.
 
-**The clipping code:**
-```javascript
-const ratio = tf.exp(tf.sub(newLogProbs, oldLogProbs));  // r_t(θ)
-const surr1 = tf.mul(ratio, advantages);                 // r_t · Â_t
-const clippedRatio = tf.clipByValue(ratio, 1 - ε, 1 + ε);// clip(r_t, 1-ε, 1+ε)
-const surr2 = tf.mul(clippedRatio, advantages);          // clipped · Â_t
-const policyLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2))); // min(...)
-```
+The **hyperparameters** (clip range ε, number of epochs K, etc.) are all in [`js/config.js`](js/config.js) under the `PPO` section.
 
 ---
 
