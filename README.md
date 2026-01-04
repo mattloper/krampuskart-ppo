@@ -20,13 +20,13 @@ With standard policy gradient, you collect a batch of experience and do **one** 
 PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) enables **multiple epochs** of updates on the same batch by clipping the objective. This prevents the policy from changing too much, keeping it "proximal" to the old policy that collected the data.
 
 ### 1. The Clipped Surrogate Objective
-```
-L^CLIP(θ) = E_t[ min( r_t(θ) · Â_t,  clip(r_t(θ), 1-ε, 1+ε) · Â_t ) ]
-```
 
-- **r_t(θ)** = π_new(a|s) / π_old(a|s) — how much the policy changed
-- **ε** = 0.1 — the clip range (prevents ratio from going outside [0.9, 1.1])
-- **Â_t** = advantage — "was this action better than expected?"
+$$L^{CLIP}(\theta) = \mathbb{E}_t \left[ \min \left( r_t(\theta) \hat{A}_t, \; \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) \hat{A}_t \right) \right]$$
+
+Where:
+- $r_t(\theta) = \frac{\pi_{new}(a|s)}{\pi_{old}(a|s)}$ — how much the policy changed
+- $\epsilon = 0.1$ — the clip range (keeps ratio in $[0.9, 1.1]$)
+- $\hat{A}_t$ — advantage: "was this action better than expected?"
 
 The clipping zeroes out gradients when the policy tries to change too much, keeping updates "proximal" (close) to the old policy.
 
