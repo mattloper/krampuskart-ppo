@@ -24,11 +24,11 @@ PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) enables **multip
 $$L^{CLIP}(\theta) = \mathbb{E}_t \left[ \min \left( r_t \hat{A}_t, \quad \text{clip}(r_t, 1-\epsilon, 1+\epsilon) \hat{A}_t \right) \right]$$
 
 Where:
-- $r_t = \frac{\pi_{new}(a|s)}{\pi_{old}(a|s)}$ — how much the action's probability changed (1.0 = no change)
-- $\hat{A}_t$ — advantage: "was this action better than expected?"
-- $\epsilon = 0.1$ — clip range, so ratio stays in $[0.9, 1.1]$
+- **r** = π_new / π_old — how much the action's probability changed (1.0 = unchanged)
+- **A** = advantage — "was this action better than expected?"
+- **ε** = 0.1 — clip range, keeps ratio in [0.9, 1.1]
 
-**How it works:** We compute two terms—the regular surrogate ($r \cdot A$) and a clipped version where $r$ can't go outside $[0.9, 1.1]$. Then we take the **minimum**, which is pessimistic: it prevents the policy from getting too much credit for big changes.
+**How it works:** We compute two versions of `ratio × advantage`—one normal, one where the ratio is clamped to [0.9, 1.1]. We take the minimum of the two, which prevents the policy from changing too aggressively.
 
 ### 2. Multiple Epochs on Same Data
 Unlike vanilla policy gradient (1 update per sample), PPO reuses collected experience for **K epochs** of minibatch SGD. This dramatically improves sample efficiency.
