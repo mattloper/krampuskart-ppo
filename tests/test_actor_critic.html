@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test: Actor-Critic Network</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <style>
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 { color: #f87171; margin-bottom: 20px; }
+        .test-section {
+            background: #1a1a1a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 3px solid #333;
+        }
+        .test-section.pass { border-left-color: #4ade80; }
+        .test-section.fail { border-left-color: #f87171; }
+        .label { color: #888; font-size: 12px; }
+        .value { color: #fff; font-size: 14px; }
+        pre { 
+            background: #111; 
+            padding: 10px; 
+            border-radius: 4px; 
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        button {
+            background: #f87171;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 5px;
+        }
+        button:hover { background: #fca5a5; }
+        #output { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🧠 Actor-Critic Network Test</h1>
+    
+    <p class="label">Tests the TensorFlow.js actor-critic model forward pass, action sampling, and gradient computation.</p>
+    
+    <div>
+        <button onclick="runAllTests()">Run All Tests</button>
+        <button onclick="testForwardPass()">Test Forward Pass</button>
+        <button onclick="testActionSampling()">Test Action Sampling</button>
+        <button onclick="testLogProb()">Test Log Prob</button>
+        <button onclick="testGradients()">Test Gradients</button>
+    </div>
+    
+    <div id="output"></div>
+
+    <script type="module">
+        import { ActorCritic } from '../js/ppo/actor-critic.js';
+        import { CONFIG } from '../js/config.js';
+        
+        const output = document.getElementById('output');
+        
+        function log(title, content, pass = null) {
+            const section = document.createElement('div');
+            section.className = 'test-section' + (pass === true ? ' pass' : pass === false ? ' fail' : '');
+            section.innerHTML = `
+                <div class="label">${title}</div>
+                <pre class="value">${typeof content === 'object' ? JSON.stringify(content, null, 2) : content}</pre>
+            `;
+            output.appendChild(section);
+        }
+        
+        function clear() {
+            output.innerHTML = '';
+        }
+        
+        // Create model
+        let model;
+        
+        async function initModel() {
+            await tf.ready();
+            log('TensorFlow.js', `Backend: ${tf.getBackend()}, Version: ${tf.version.tfjs}`);
+            model = new ActorCritic(CONFIG.PPO.INPUT_DIM, CONFIG.PPO.ACTION_DIM, CONFIG.PPO.HIDDEN_UNITS);
+            log('Model Created', {
+                inputDim: CONFIG.PPO.INPUT_DIM,
+                actionDim: CONFIG.PPO.ACTION_DIM,
+                hiddenUnits: CONFIG.PPO.HIDDEN_UNITS
+            });
+        }
+        
+        window.testForwardPass = async function() {
+            clear();
+            await initModel();
+            
+            // Create random state batch
+            const batchSize = 4;
+            const states = tf.randomNormal([batchSize, CONFIG.PPO.INPUT_DIM]);
+            
+            log('Input States Shape', states.shape.toString());
+            
+            const { mean, value, logStd } = model.forward(states);
+            
+            log('Forward Pass Results', {
+                meanShape: mean.shape.toString(),
+                valueShape: value.shape.toString(),
+                logStdShape: logStd.shape.toString(),
+                meanValues: Array.from(mean.dataSync()).slice(0, 4).map(v => v.toFixed(4)),
+                valueValues: Array.from(value.dataSync()).map(v => v.toFixed(4)),
+                logStdValues: Array.from(logStd.dataSync()).map(v => v.toFixed(4))
+            }, true);
+            
+            // Check shapes are correct
+            const meanOk = mean.shape[0] === batchSize && mean.shape[1] === CONFIG.PPO.ACTION_DIM;
+            const valueOk = value.shape[0] === batchSize;
+            
+            log('Shape Validation', `Mean: ${meanOk ? '✓' : '✗'}, Value: ${valueOk ? '✓' : '✗'}`, meanOk && valueOk);
+            
+            states.dispose();
+        }
+        
+        window.testActionSampling = async function() {
+            clear();
+            await initModel();
+            
+            // Single state
+            const state = new Array(CONFIG.PPO.INPUT_DIM).fill(0).map(() => Math.random() * 2 - 1);
+            
+            log('Input State', state.map(v => v.toFixed(3)));
+            
+            // Sample multiple actions
+            const samples = [];
+            for (let i = 0; i < 10; i++) {
+                const { action, value, logProb, mean } = model.act(state);
+                samples.push({
+                    action: Array.from(action).map(v => v.toFixed(3)),
+                    value: value.toFixed(3),
+                    logProb: logProb.toFixed(3)
+                });
+            }
+            
+            log('Action Samples (10x)', samples, true);
+            
+            // Check actions are bounded
+            const allBounded = samples.every(s => 
+                s.action.every(a => parseFloat(a) >= -1 && parseFloat(a) <= 1)
+            );
+            log('Actions Bounded [-1, 1]', allBounded ? '✓ Yes' : '✗ No', allBounded);
+            
+            // Check for variation (exploration)
+            const steerValues = samples.map(s => parseFloat(s.action[0]));
+            const steerStd = Math.sqrt(steerValues.reduce((a, v) => a + Math.pow(v - steerValues.reduce((b, c) => b + c, 0) / steerValues.length, 2), 0) / steerValues.length);
+            log('Action Variation (std)', `Steer std: ${steerStd.toFixed(4)}`, steerStd > 0.01);
+        }
+        
+        window.testLogProb = async function() {
+            clear();
+            await initModel();
+            
+            const batchSize = 8;
+            const states = tf.randomNormal([batchSize, CONFIG.PPO.INPUT_DIM]);
+            const actions = tf.randomUniform([batchSize, CONFIG.PPO.ACTION_DIM], -1, 1);
+            
+            const logProbs = model.getLogProb(states, actions);
+            
+            log('Log Probabilities', {
+                shape: logProbs.shape.toString(),
+                values: Array.from(logProbs.dataSync()).map(v => v.toFixed(4))
+            }, true);
+            
+            // Log probs should be negative (log of probability < 1)
+            const allNegative = Array.from(logProbs.dataSync()).every(v => v <= 0);
+            log('All Log Probs ≤ 0', allNegative ? '✓ Yes' : '✗ No', allNegative);
+            
+            states.dispose();
+            actions.dispose();
+            logProbs.dispose();
+        }
+        
+        window.testGradients = async function() {
+            clear();
+            await initModel();
+            
+            const states = tf.randomNormal([16, CONFIG.PPO.INPUT_DIM]);
+            const actions = tf.randomUniform([16, CONFIG.PPO.ACTION_DIM], -1, 1);
+            const advantages = tf.randomNormal([16]);
+            
+            // Compute gradients
+            const f = () => {
+                const logProbs = model.getLogProb(states, actions);
+                return tf.neg(tf.mean(tf.mul(logProbs, advantages)));
+            };
+            
+            const trainableWeights = model.getTrainableWeights();
+            log('Trainable Weights', trainableWeights.map(w => `${w.name}: ${w.shape}`));
+            
+            const grads = tf.grads(f)(trainableWeights.map(w => w.read()));
+            
+            log('Gradients Computed', {
+                numGradients: grads.length,
+                shapes: grads.map(g => g.shape.toString()),
+                hasNaN: grads.some(g => tf.any(tf.isNaN(g)).dataSync()[0])
+            });
+            
+            const noNaN = !grads.some(g => tf.any(tf.isNaN(g)).dataSync()[0]);
+            log('No NaN in Gradients', noNaN ? '✓ Yes' : '✗ No', noNaN);
+            
+            states.dispose();
+            actions.dispose();
+            advantages.dispose();
+            grads.forEach(g => g.dispose());
+        }
+        
+        window.runAllTests = async function() {
+            clear();
+            await testForwardPass();
+            await testActionSampling();
+            await testLogProb();
+            await testGradients();
+            log('All Tests Complete', '🎉', true);
+        }
+        
+        // Run on load
+        runAllTests();
+    </script>
+</body>
+</html>
+
+

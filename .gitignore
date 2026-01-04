@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Planning docs (keep README only)
+plan.md
+ppo_plan.md
+ttc_plan.md
+paper.txt
+
+# Dev files
+index_old.html
+server.sh
+example_code/
+
+# OS
+.DS_Store
+.server.pid

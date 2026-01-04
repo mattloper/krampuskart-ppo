@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krampus Kart: PPO Training</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="ui-layer">
+        <p class="text-lg font-bold text-red-500 mb-2">KRAMPUS KART: PPO</p>
+        
+        <!-- Question 1: How are cars doing? -->
+        <div class="stat-box mb-2">
+            <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">How are cars doing?</p>
+            <p class="text-base">Cars: <span id="ai-alive">0</span>/<span id="ai-total">0</span> | Leader: <span id="leader-progress">0%</span></p>
+            <p class="text-base">Avg Reward: <span id="avg-reward">0</span> | Best: <span id="best-fit">0</span></p>
+        </div>
+        
+        <!-- Question 2: How is learning going? -->
+        <div id="learning-box" class="stat-box mb-2">
+            <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">How is learning going?</p>
+            <p class="text-base">PPO updates: <span id="gen-count">0</span></p>
+            <p id="status-msg" class="text-yellow-400 text-sm">Initializing...</p>
+            <p class="font-mono text-xs mt-1">
+                <span class="text-yellow-400">Actor:</span> <span id="actor-stats" class="text-gray-300">—</span>
+            </p>
+            <p class="font-mono text-xs">
+                <span class="text-green-400">Critic:</span> <span id="critic-stats" class="text-gray-300">—</span>
+            </p>
+        </div>
+        
+        <!-- Training indicator overlay -->
+        <div id="training-indicator" class="hidden">
+            <div class="training-pulse"></div>
+            <span>🧠 Training neural networks...</span>
+        </div>
+        
+        <!-- What is PPO? -->
+        <div class="stat-box mb-2 text-xs">
+            <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">What is PPO?</p>
+            <p class="text-gray-300"><span class="text-yellow-400">Actor</span> = the policy (decides steering)</p>
+            <p class="text-gray-300"><span class="text-green-400">Critic</span> = predicts future reward</p>
+            <p class="text-gray-300"><span class="text-cyan-400">Advantage</span> = "was this action good?"</p>
+        </div>
+        
+        <!-- Legend -->
+        <div class="stat-box text-sm">
+            <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Car Colors = Episode Reward</p>
+            <div class="flex items-center gap-2">
+                <span class="text-red-500">🔴 Just spawned</span>
+                <span class="text-gray-400">→</span>
+                <span class="text-cyan-400">🔵 Survived longer</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="nn-visualizer">
+        <p class="text-[10px] text-gray-400 mb-1 uppercase tracking-widest font-bold">Separate Networks (as paper recommends)</p>
+        <canvas id="nnCanvas" width="400" height="200"></canvas>
+        <p class="text-[9px] text-gray-500 mt-1">Line colors: <span class="text-red-400">red</span>=negative, <span class="text-cyan-400">blue</span>=positive | Each trained independently!</p>
+    </div>
+
+    <div id="loss-chart-container">
+        <p class="text-[10px] text-gray-400 mb-1 uppercase tracking-widest font-bold">Avg Reward</p>
+        <canvas id="lossChart" width="320" height="150"></canvas>
+    </div>
+
+    <div class="btn-container">
+        <button class="control-btn" onclick="restartFromScratch()">Reset Training</button>
+    </div>
+
+    <div class="controls-hint">
+        PPO • TensorFlow.js • <span id="build-time"></span>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>

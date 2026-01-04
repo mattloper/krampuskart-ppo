@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spline Test</title>
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a2e;
+            font-family: system-ui, sans-serif;
+            color: white;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        #info h3 { margin: 0 0 8px 0; color: #4ecdc4; }
+        #info p { margin: 4px 0; }
+        .pass { color: #4ecdc4; }
+        .fail { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">
+        <h3>Spline Test</h3>
+        <p>Drag control points to reshape</p>
+        <p>Curve: <span id="curveStatus" class="pass">—</span></p>
+        <p>Seam: <span id="seamStatus" class="pass">—</span></p>
+    </div>
+    
+    <script type="module">
+        import { ClosedSpline } from '../js/spline.js';
+        
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Initial control points (will be scaled to canvas)
+        let controlPoints = [
+            { x: 0.2, y: 0.3 },
+            { x: 0.5, y: 0.15 },
+            { x: 0.8, y: 0.3 },
+            { x: 0.85, y: 0.6 },
+            { x: 0.6, y: 0.8 },
+            { x: 0.3, y: 0.75 },
+            { x: 0.15, y: 0.5 },
+        ];
+        
+        let dragging = null;
+        let spline = null;
+        
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            rebuildSpline();
+            draw();
+        }
+        
+        function toCanvas(p) {
+            return {
+                x: p.x * canvas.width,
+                y: p.y * canvas.height
+            };
+        }
+        
+        function fromCanvas(p) {
+            return {
+                x: p.x / canvas.width,
+                y: p.y / canvas.height
+            };
+        }
+        
+        function rebuildSpline() {
+            const scaledPoints = controlPoints.map(toCanvas);
+            spline = new ClosedSpline(scaledPoints);
+        }
+        
+        function draw() {
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            if (!spline) return;
+            
+            // Draw the spline curve
+            ctx.beginPath();
+            ctx.strokeStyle = '#4ecdc4';
+            ctx.lineWidth = 3;
+            
+            const steps = 200;
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const p = spline.sample(t);
+                if (i === 0) ctx.moveTo(p.x, p.y);
+                else ctx.lineTo(p.x, p.y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+            
+            // Draw tangent and normal vectors at regular intervals
+            ctx.lineWidth = 2;
+            for (let i = 0; i < 20; i++) {
+                const t = i / 20;
+                const p = spline.sample(t);
+                const tan = spline.tangent(t);
+                const norm = spline.normal(t);
+                
+                // Tangent (yellow)
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255, 200, 0, 0.7)';
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + tan.x * 30, p.y + tan.y * 30);
+                ctx.stroke();
+                
+                // Normal (magenta)
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255, 0, 200, 0.5)';
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + norm.x * 20, p.y + norm.y * 20);
+                ctx.stroke();
+            }
+            
+            // Draw control points
+            const points = spline.getControlPoints();
+            points.forEach((p, i) => {
+                ctx.beginPath();
+                ctx.fillStyle = dragging === i ? '#ff6b6b' : '#fff';
+                ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = '#000';
+                ctx.font = 'bold 12px system-ui';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(i.toString(), p.x, p.y);
+            });
+            
+            // Check for seam continuity
+            checkSeam();
+        }
+        
+        function checkSeam() {
+            // Sample points very close to t=0 and t=1
+            const p0 = spline.sample(0);
+            const p1 = spline.sample(0.999);
+            const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+            
+            const t0 = spline.tangent(0);
+            const t1 = spline.tangent(0.999);
+            const dotTan = t0.x * t1.x + t0.y * t1.y;
+            
+            const seamOk = dist < 5 && dotTan > 0.99;
+            
+            document.getElementById('curveStatus').textContent = 'Drawing';
+            document.getElementById('curveStatus').className = 'pass';
+            
+            document.getElementById('seamStatus').textContent = seamOk ? 'Continuous ✓' : `Gap: ${dist.toFixed(1)}px`;
+            document.getElementById('seamStatus').className = seamOk ? 'pass' : 'fail';
+        }
+        
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            
+            const points = spline.getControlPoints();
+            for (let i = 0; i < points.length; i++) {
+                if (Math.hypot(mx - points[i].x, my - points[i].y) < 15) {
+                    dragging = i;
+                    break;
+                }
+            }
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            if (dragging === null) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            controlPoints[dragging] = fromCanvas({
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            });
+            rebuildSpline();
+            draw();
+        });
+        
+        canvas.addEventListener('mouseup', () => {
+            dragging = null;
+        });
+        
+        window.addEventListener('resize', resize);
+        resize();
+    </script>
+</body>
+</html>
+

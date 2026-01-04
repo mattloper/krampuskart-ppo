@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test: Reward Function</title>
+    <style>
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 { color: #f87171; margin-bottom: 20px; }
+        h2 { color: #888; font-size: 14px; margin-top: 30px; }
+        .canvas-container {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        canvas {
+            background: #111;
+            border-radius: 4px;
+        }
+        .controls {
+            margin: 15px 0;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            color: #888;
+            font-size: 12px;
+        }
+        input[type="range"] {
+            width: 200px;
+        }
+        .value-display {
+            color: #4ade80;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .reward-breakdown {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .reward-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #333;
+        }
+        .reward-item:last-child { border-bottom: none; }
+        .positive { color: #4ade80; }
+        .negative { color: #f87171; }
+    </style>
+</head>
+<body>
+    <h1>🎯 Reward Function Visualization</h1>
+    
+    <p>Interactive visualization of the PPO reward function components.</p>
+    
+    <h2>TIME-TO-COLLISION PENALTY CURVE</h2>
+    <div class="canvas-container">
+        <canvas id="ttcCanvas" width="600" height="200"></canvas>
+    </div>
+    
+    <h2>INTERACTIVE REWARD CALCULATOR</h2>
+    <div class="controls">
+        <div class="control-group">
+            <label>Min Sensor Distance: <span id="distValue">100</span></label>
+            <input type="range" id="sensorDist" min="5" max="200" value="100" oninput="updateReward()">
+        </div>
+        <div class="control-group">
+            <label>Speed: <span id="speedValue">5</span></label>
+            <input type="range" id="speed" min="0" max="12" value="5" step="0.5" oninput="updateReward()">
+        </div>
+        <div class="control-group">
+            <label>Progress Delta: <span id="progressValue">0.001</span></label>
+            <input type="range" id="progress" min="-0.01" max="0.02" value="0.001" step="0.0001" oninput="updateReward()">
+        </div>
+        <div class="control-group">
+            <label>Dead: <span id="deadValue">No</span></label>
+            <input type="checkbox" id="dead" onchange="updateReward()">
+        </div>
+    </div>
+    
+    <div class="reward-breakdown" id="breakdown"></div>
+    
+    <h2>REWARD OVER DISTANCE (at various speeds)</h2>
+    <div class="canvas-container">
+        <canvas id="rewardCanvas" width="600" height="250"></canvas>
+    </div>
+
+    <script type="module">
+        import { CONFIG } from '../js/config.js';
+        
+        const ppo = CONFIG.PPO;
+        
+        // TTC penalty function
+        function ttcPenalty(dist, speed) {
+            const ttc = dist / Math.max(speed, 0.5);
+            // Only penalize when TTC is below threshold
+            if (ttc >= ppo.TTC_THRESHOLD) return 0;
+            const normalizedTTC = ttc / ppo.TTC_THRESHOLD;
+            return (1 - normalizedTTC) * ppo.TTC_PENALTY_WEIGHT;
+        }
+        
+        // Full reward calculation
+        function computeReward(sensorDist, speed, deltaProgress, dead) {
+            let reward = 0;
+            const components = {};
+            
+            // Progress reward
+            components.progress = deltaProgress * ppo.PROGRESS_REWARD_SCALE;
+            reward += components.progress;
+            
+            // TTC penalty (using single sensor for simplicity)
+            components.ttc = -ttcPenalty(sensorDist, speed) * 8;  // 8 sensors
+            reward += components.ttc;
+            
+            // Speed bonus
+            components.speed = speed * ppo.SPEED_REWARD_SCALE;
+            reward += components.speed;
+            
+            // Death penalty
+            components.death = dead ? ppo.DEATH_PENALTY : 0;
+            reward += components.death;
+            
+            return { total: reward, components };
+        }
+        
+        // Draw TTC curve
+        function drawTTCCurve() {
+            const canvas = document.getElementById('ttcCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const padding = 40;
+            const width = canvas.width - padding * 2;
+            const height = canvas.height - padding * 2;
+            
+            // Grid
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 10; i++) {
+                const x = padding + (width / 10) * i;
+                ctx.beginPath();
+                ctx.moveTo(x, padding);
+                ctx.lineTo(x, padding + height);
+                ctx.stroke();
+            }
+            for (let i = 0; i <= 5; i++) {
+                const y = padding + (height / 5) * i;
+                ctx.beginPath();
+                ctx.moveTo(padding, y);
+                ctx.lineTo(padding + width, y);
+                ctx.stroke();
+            }
+            
+            // Axes labels
+            ctx.fillStyle = '#888';
+            ctx.font = '10px monospace';
+            ctx.fillText('TTC Penalty', padding, 15);
+            ctx.fillText('Distance →', canvas.width / 2, canvas.height - 5);
+            
+            // Draw curves for different speeds
+            const speeds = [2, 5, 10];
+            const colors = ['#f87171', '#facc15', '#4ade80'];
+            
+            speeds.forEach((speed, si) => {
+                ctx.strokeStyle = colors[si];
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                
+                for (let d = 0; d <= 200; d++) {
+                    const penalty = ttcPenalty(d, speed);
+                    const x = padding + (d / 200) * width;
+                    const y = padding + height - (penalty / 0.4) * height;
+                    
+                    if (d === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                
+                // Label
+                ctx.fillStyle = colors[si];
+                ctx.fillText(`speed=${speed}`, canvas.width - 80, 30 + si * 15);
+            });
+            
+            // X axis labels
+            ctx.fillStyle = '#666';
+            for (let d = 0; d <= 200; d += 50) {
+                const x = padding + (d / 200) * width;
+                ctx.fillText(d.toString(), x - 5, canvas.height - 25);
+            }
+        }
+        
+        // Draw reward over distance
+        function drawRewardCurve() {
+            const canvas = document.getElementById('rewardCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const padding = 50;
+            const width = canvas.width - padding * 2;
+            const height = canvas.height - padding * 2;
+            
+            // Grid
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 10; i++) {
+                const x = padding + (width / 10) * i;
+                ctx.beginPath();
+                ctx.moveTo(x, padding);
+                ctx.lineTo(x, padding + height);
+                ctx.stroke();
+            }
+            
+            // Zero line
+            const zeroY = padding + height * 0.4;
+            ctx.strokeStyle = '#555';
+            ctx.beginPath();
+            ctx.moveTo(padding, zeroY);
+            ctx.lineTo(padding + width, zeroY);
+            ctx.stroke();
+            ctx.fillStyle = '#555';
+            ctx.fillText('0', padding - 15, zeroY + 4);
+            
+            // Draw curves for different progress values
+            const progresses = [-0.002, 0, 0.002, 0.005];
+            const colors = ['#f87171', '#888', '#4ade80', '#22d3ee'];
+            const speed = 5;
+            
+            progresses.forEach((prog, pi) => {
+                ctx.strokeStyle = colors[pi];
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                
+                for (let d = 5; d <= 200; d++) {
+                    const { total } = computeReward(d, speed, prog, false);
+                    const x = padding + ((d - 5) / 195) * width;
+                    // Map reward from [-3, 1] to canvas
+                    const y = padding + height * 0.4 - (total / 1) * (height * 0.4);
+                    
+                    if (d === 5) ctx.moveTo(x, Math.max(padding, Math.min(padding + height, y)));
+                    else ctx.lineTo(x, Math.max(padding, Math.min(padding + height, y)));
+                }
+                ctx.stroke();
+                
+                // Label
+                ctx.fillStyle = colors[pi];
+                ctx.fillText(`Δprog=${prog.toFixed(3)}`, canvas.width - 100, 25 + pi * 15);
+            });
+            
+            ctx.fillStyle = '#888';
+            ctx.fillText(`(speed=${speed})`, canvas.width - 100, 25 + progresses.length * 15);
+            
+            // Axis labels
+            ctx.fillStyle = '#666';
+            ctx.fillText('Distance →', canvas.width / 2, canvas.height - 5);
+            ctx.fillText('Total Reward', padding, 15);
+        }
+        
+        // Update reward display
+        window.updateReward = function() {
+            const sensorDist = parseFloat(document.getElementById('sensorDist').value);
+            const speed = parseFloat(document.getElementById('speed').value);
+            const progress = parseFloat(document.getElementById('progress').value);
+            const dead = document.getElementById('dead').checked;
+            
+            document.getElementById('distValue').textContent = sensorDist;
+            document.getElementById('speedValue').textContent = speed;
+            document.getElementById('progressValue').textContent = progress.toFixed(4);
+            document.getElementById('deadValue').textContent = dead ? 'Yes' : 'No';
+            
+            const { total, components } = computeReward(sensorDist, speed, progress, dead);
+            
+            const breakdown = document.getElementById('breakdown');
+            breakdown.innerHTML = `
+                <div class="reward-item">
+                    <span>Progress (Δ${progress.toFixed(4)} × ${ppo.PROGRESS_REWARD_SCALE})</span>
+                    <span class="${components.progress >= 0 ? 'positive' : 'negative'}">${components.progress.toFixed(4)}</span>
+                </div>
+                <div class="reward-item">
+                    <span>TTC Penalty (8 sensors × penalty)</span>
+                    <span class="${components.ttc >= 0 ? 'positive' : 'negative'}">${components.ttc.toFixed(4)}</span>
+                </div>
+                <div class="reward-item">
+                    <span>Speed Bonus (${speed} × ${ppo.SPEED_REWARD_SCALE})</span>
+                    <span class="positive">${components.speed.toFixed(4)}</span>
+                </div>
+                <div class="reward-item">
+                    <span>Death Penalty</span>
+                    <span class="${components.death >= 0 ? 'positive' : 'negative'}">${components.death.toFixed(4)}</span>
+                </div>
+                <div class="reward-item" style="font-weight: bold; font-size: 16px;">
+                    <span>TOTAL REWARD</span>
+                    <span class="${total >= 0 ? 'positive' : 'negative'}">${total.toFixed(4)}</span>
+                </div>
+            `;
+        }
+        
+        // Initialize
+        drawTTCCurve();
+        drawRewardCurve();
+        updateReward();
+    </script>
+</body>
+</html>
+

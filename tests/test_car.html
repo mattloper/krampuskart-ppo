@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Test</title>
+    <style>
+        body {
+            margin: 0;
+            background: #050a14;
+            font-family: system-ui, sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        #info h3 { margin: 0 0 8px 0; color: #4ecdc4; }
+        #info p { margin: 4px 0; }
+        .value { color: #ffd93d; font-family: monospace; }
+        .on { color: #4ecdc4; }
+        .off { color: #ff6b6b; }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+        kbd {
+            background: #333;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin: 0 2px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">
+        <h3>Car Test</h3>
+        <p>Position: <span id="pos" class="value">—</span></p>
+        <p>Speed: <span id="speed" class="value">—</span></p>
+        <p>Angle: <span id="angle" class="value">—</span></p>
+        <p>Progress: <span id="progress" class="value">—</span></p>
+        <p>On road: <span id="onRoad" class="value">—</span></p>
+        <p>Laps: <span id="laps" class="value">0</span></p>
+        <p>Sensors: <span id="sensors" class="value" style="font-size: 10px;">—</span></p>
+    </div>
+    <div id="controls">
+        <kbd>W</kbd> Accelerate
+        <kbd>S</kbd> Brake
+        <kbd>A</kbd> <kbd>D</kbd> Steer
+        <kbd>R</kbd> Reset
+    </div>
+    
+    <script type="module">
+        import { CONFIG } from '../js/config.js';
+        import { Track } from '../js/track.js';
+        import { Car } from '../js/car.js';
+        import { NeuralNetwork } from '../js/neural-network.js';
+        
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Same track as test_track
+        const trackCenterline = [
+            { x: 200, y: -25 },
+            { x: 550, y: -25 },
+            { x: 875, y: -25 },
+            { x: 1150, y: 300 },
+            { x: 975, y: 650 },
+            { x: 1225, y: 775 },
+            { x: 1300, y: 1025 },
+            { x: 950, y: 1300 },
+            { x: 550, y: 1250 },
+            { x: 450, y: 1075 },
+            { x: 300, y: 1100 },
+            { x: 75, y: 1300 },
+            { x: -425, y: 1125 },
+            { x: -475, y: 625 },
+            { x: -150, y: 600 },
+            { x: -350, y: 400 },
+            { x: -50, y: 100 },
+        ];
+        
+        let track, car, camera;
+        let keys = {};
+        
+        // UI elements
+        const posEl = document.getElementById('pos');
+        const speedEl = document.getElementById('speed');
+        const angleEl = document.getElementById('angle');
+        const progressEl = document.getElementById('progress');
+        const onRoadEl = document.getElementById('onRoad');
+        const lapsEl = document.getElementById('laps');
+        const sensorsEl = document.getElementById('sensors');
+        
+        function init() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            track = new Track(trackCenterline);
+            
+            // Start position
+            const start = track.getStartLine();
+            car = new Car(
+                0,
+                start.point.x,
+                start.point.y,
+                Math.atan2(start.tangent.y, start.tangent.x)
+            );
+            
+            // Override the brain with manual control
+            car.brain = {
+                predict: () => {
+                    let steer = 0;
+                    let throttle = 0;
+                    if (keys['KeyA'] || keys['ArrowLeft']) steer = -1;
+                    if (keys['KeyD'] || keys['ArrowRight']) steer = 1;
+                    if (keys['KeyW'] || keys['ArrowUp']) throttle = 1;
+                    if (keys['KeyS'] || keys['ArrowDown']) throttle = -0.5;
+                    return [steer, throttle];
+                }
+            };
+            
+            camera = { x: car.x, y: car.y };
+        }
+        
+        function reset() {
+            const start = track.getStartLine();
+            car.x = start.point.x;
+            car.y = start.point.y;
+            car.angle = Math.atan2(start.tangent.y, start.tangent.x);
+            car.speed = 0;
+            car.dead = false;
+            car.finished = false;
+            car.fitness = 0;
+            car.lapCount = 0;
+            car.lastProgress = 0;
+            car.timer = 0;
+            car.graceTimer = CONFIG.GRACE_PERIOD;
+        }
+        
+        function update() {
+            if (!car.dead && !car.finished) {
+                car.update(track, []);
+            }
+            
+            // Smooth camera follow
+            camera.x += (car.x - camera.x) * 0.1;
+            camera.y += (car.y - camera.y) * 0.1;
+        }
+        
+        function draw() {
+            ctx.fillStyle = '#050a14';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            ctx.translate(canvas.width/2 - camera.x, canvas.height/2 - camera.y);
+            
+            track.draw(ctx);
+            car.draw(ctx, true);
+            
+            ctx.restore();
+            
+            // Update UI
+            posEl.textContent = `${Math.round(car.x)}, ${Math.round(car.y)}`;
+            speedEl.textContent = car.speed.toFixed(2);
+            angleEl.textContent = (car.angle * 180 / Math.PI).toFixed(1) + '°';
+            progressEl.textContent = car.lastProgress.toFixed(3);
+            
+            const onRoad = track.isOnRoad(car.x, car.y);
+            onRoadEl.textContent = onRoad ? 'YES' : 'NO';
+            onRoadEl.className = onRoad ? 'value on' : 'value off';
+            
+            lapsEl.textContent = car.lapCount;
+            sensorsEl.textContent = car.sensors.map(s => Math.floor(s)).join(', ');
+            
+            if (car.dead) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 24px system-ui';
+                ctx.textAlign = 'center';
+                ctx.fillText('CRASHED! Press R to reset', canvas.width/2, canvas.height/2);
+            }
+            
+            if (car.finished) {
+                ctx.fillStyle = 'rgba(0, 255, 100, 0.3)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 24px system-ui';
+                ctx.textAlign = 'center';
+                ctx.fillText('LAP COMPLETE! Press R to reset', canvas.width/2, canvas.height/2);
+            }
+        }
+        
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+        
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'KeyR') reset();
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+        });
+        
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        init();
+        loop();
+    </script>
+</body>
+</html>
+

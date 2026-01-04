@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test: PPO Training</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <style>
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 { color: #f87171; margin-bottom: 10px; }
+        h2 { color: #888; font-size: 14px; margin-top: 20px; }
+        p.desc { color: #666; font-size: 12px; margin-bottom: 20px; }
+        .panel {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        canvas { background: #111; border-radius: 4px; }
+        button {
+            background: #f87171;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 5px;
+        }
+        button:hover { background: #fca5a5; }
+        button:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .stat {
+            background: #222;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        .stat-label { color: #888; font-size: 11px; }
+        .stat-value { color: #4ade80; font-size: 18px; font-weight: bold; }
+        #log {
+            background: #111;
+            padding: 10px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            font-size: 11px;
+            font-family: monospace;
+        }
+        .log-entry { margin: 2px 0; }
+        .log-entry.info { color: #4ade80; }
+        .log-entry.warn { color: #facc15; }
+        .log-entry.error { color: #f87171; }
+    </style>
+</head>
+<body>
+    <h1>🏎️ PPO Training Test</h1>
+    <p class="desc">Simplified environment to test PPO learning. Agent learns to move forward (action[1] > 0) and steer towards "goal".</p>
+    
+    <div>
+        <button onclick="startTraining()" id="startBtn">Start Training</button>
+        <button onclick="stopTraining()" id="stopBtn" disabled>Stop</button>
+        <button onclick="resetTraining()">Reset</button>
+        <button onclick="testPolicy()">Test Policy</button>
+    </div>
+    
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-label">Updates</div>
+            <div class="stat-value" id="updates">0</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Total Steps</div>
+            <div class="stat-value" id="steps">0</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Avg Reward</div>
+            <div class="stat-value" id="reward">0</div>
+        </div>
+        <div class="stat">
+            <div class="stat-label">Policy Loss</div>
+            <div class="stat-value" id="loss">0</div>
+        </div>
+    </div>
+    
+    <h2>REWARD CURVE</h2>
+    <div class="panel">
+        <canvas id="rewardChart" width="800" height="150"></canvas>
+    </div>
+    
+    <h2>ACTION DISTRIBUTION</h2>
+    <div class="panel">
+        <canvas id="actionChart" width="800" height="100"></canvas>
+    </div>
+    
+    <h2>TRAINING LOG</h2>
+    <div id="log"></div>
+
+    <script type="module">
+        import { ActorCritic } from '../js/ppo/actor-critic.js';
+        import { ExperienceBuffer } from '../js/ppo/experience-buffer.js';
+        
+        // Simplified test config
+        const CONFIG = {
+            INPUT_DIM: 4,      // [goal_x, goal_y, pos_x, pos_y]
+            ACTION_DIM: 2,     // [turn, forward]
+            HIDDEN_UNITS: [32, 32],
+            GAMMA: 0.99,
+            GAE_LAMBDA: 0.95,
+            CLIP_EPSILON: 0.2,
+            ENTROPY_COEF: 0.01,
+            VALUE_COEF: 0.5,
+            LEARNING_RATE: 3e-4,
+            BATCH_SIZE: 32,
+            EPOCHS_PER_UPDATE: 4,
+            ROLLOUT_LENGTH: 256,
+        };
+        
+        let model, buffer, optimizer;
+        let running = false;
+        let rewardHistory = [];
+        let actionHistory = [];
+        
+        // Simple 2D environment
+        class SimpleEnv {
+            constructor() {
+                this.reset();
+            }
+            
+            reset() {
+                this.pos = { x: 0, y: 0 };
+                this.goal = { x: Math.random() * 2 - 1, y: Math.random() * 2 - 1 };
+                this.steps = 0;
+                return this.getState();
+            }
+            
+            getState() {
+                return [this.goal.x, this.goal.y, this.pos.x, this.pos.y];
+            }
+            
+            step(action) {
+                const [turn, forward] = action;
+                
+                // Move towards goal based on actions
+                const dx = this.goal.x - this.pos.x;
+                const dy = this.goal.y - this.pos.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                // Forward moves towards goal
+                if (forward > 0) {
+                    this.pos.x += (dx / dist) * 0.1 * forward;
+                    this.pos.y += (dy / dist) * 0.1 * forward;
+                }
+                
+                // Reward for getting closer
+                const newDist = Math.sqrt(
+                    Math.pow(this.goal.x - this.pos.x, 2) + 
+                    Math.pow(this.goal.y - this.pos.y, 2)
+                );
+                
+                let reward = (dist - newDist) * 10;  // Reward for reducing distance
+                reward += forward > 0 ? 0.1 : -0.1;  // Small bonus for moving forward
+                
+                this.steps++;
+                const done = newDist < 0.1 || this.steps >= 100;
+                
+                if (newDist < 0.1) reward += 10;  // Bonus for reaching goal
+                
+                return {
+                    state: this.getState(),
+                    reward,
+                    done
+                };
+            }
+        }
+        
+        const env = new SimpleEnv();
+        
+        async function init() {
+            await tf.ready();
+            log(`TensorFlow.js ready (${tf.getBackend()})`, 'info');
+            
+            model = new ActorCritic(CONFIG.INPUT_DIM, CONFIG.ACTION_DIM, CONFIG.HIDDEN_UNITS);
+            buffer = new ExperienceBuffer();
+            optimizer = tf.train.adam(CONFIG.LEARNING_RATE);
+            
+            log('Model initialized', 'info');
+        }
+        
+        async function trainStep() {
+            let state = env.getState();
+            
+            // Collect rollout
+            while (buffer.length < CONFIG.ROLLOUT_LENGTH) {
+                const { action, value, logProb } = model.act(state);
+                actionHistory.push([...action]);
+                
+                const result = env.step(action);
+                buffer.add(state, action, result.reward, value, logProb, result.done);
+                
+                state = result.state;
+                if (result.done) {
+                    state = env.reset();
+                }
+            }
+            
+            // PPO update
+            const lastValue = model.getValue(state);
+            buffer.computeReturnsAndAdvantages(lastValue, CONFIG.GAMMA, CONFIG.GAE_LAMBDA);
+            
+            let totalLoss = 0;
+            
+            for (let epoch = 0; epoch < CONFIG.EPOCHS_PER_UPDATE; epoch++) {
+                const batches = buffer.getBatches(CONFIG.BATCH_SIZE);
+                
+                for (const batch of batches) {
+                    const loss = optimizer.minimize(() => {
+                        return tf.tidy(() => {
+                            const states = tf.tensor2d(batch.states);
+                            const actions = tf.tensor2d(batch.actions);
+                            const returns = tf.tensor1d(batch.returns);
+                            const advantages = tf.tensor1d(batch.advantages);
+                            const oldLogProbs = tf.tensor1d(batch.oldLogProbs);
+                            
+                            const { mean, value, logStd } = model.forward(states);
+                            const newLogProbs = model.getLogProb(states, actions);
+                            
+                            // Policy loss
+                            const ratio = tf.exp(tf.sub(newLogProbs, oldLogProbs));
+                            const surr1 = tf.mul(ratio, advantages);
+                            const surr2 = tf.mul(
+                                tf.clipByValue(ratio, 1 - CONFIG.CLIP_EPSILON, 1 + CONFIG.CLIP_EPSILON),
+                                advantages
+                            );
+                            const policyLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2)));
+                            
+                            // Value loss
+                            const valueLoss = tf.mean(tf.square(tf.sub(value, returns)));
+                            
+                            // Entropy
+                            const entropy = model.getEntropy();
+                            
+                            return tf.add(
+                                tf.add(policyLoss, tf.mul(CONFIG.VALUE_COEF, valueLoss)),
+                                tf.mul(-CONFIG.ENTROPY_COEF, entropy)
+                            );
+                        });
+                    }, true, model.getTrainableWeights());
+                    
+                    totalLoss = loss.dataSync()[0];
+                }
+            }
+            
+            const stats = buffer.getStats();
+            rewardHistory.push(stats.meanReward);
+            
+            buffer.clear();
+            
+            return { loss: totalLoss, reward: stats.meanReward };
+        }
+        
+        async function trainingLoop() {
+            let updateCount = 0;
+            let totalSteps = 0;
+            
+            while (running) {
+                const { loss, reward } = await trainStep();
+                updateCount++;
+                totalSteps += CONFIG.ROLLOUT_LENGTH;
+                
+                document.getElementById('updates').textContent = updateCount;
+                document.getElementById('steps').textContent = totalSteps;
+                document.getElementById('reward').textContent = reward.toFixed(3);
+                document.getElementById('loss').textContent = loss.toFixed(4);
+                
+                if (updateCount % 5 === 0) {
+                    log(`Update ${updateCount}: reward=${reward.toFixed(3)}, loss=${loss.toFixed(4)}`);
+                    drawCharts();
+                }
+                
+                await tf.nextFrame();
+            }
+        }
+        
+        window.startTraining = async function() {
+            if (running) return;
+            running = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            log('Training started', 'info');
+            await trainingLoop();
+        }
+        
+        window.stopTraining = function() {
+            running = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            log('Training stopped', 'warn');
+        }
+        
+        window.resetTraining = async function() {
+            running = false;
+            rewardHistory = [];
+            actionHistory = [];
+            await init();
+            document.getElementById('updates').textContent = '0';
+            document.getElementById('steps').textContent = '0';
+            document.getElementById('reward').textContent = '0';
+            document.getElementById('loss').textContent = '0';
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            drawCharts();
+            log('Training reset', 'warn');
+        }
+        
+        window.testPolicy = function() {
+            log('Testing current policy...', 'info');
+            let state = env.reset();
+            let totalReward = 0;
+            
+            for (let i = 0; i < 100; i++) {
+                const { action } = model.act(state);
+                const result = env.step(action);
+                totalReward += result.reward;
+                state = result.state;
+                
+                if (result.done) {
+                    log(`Episode ended at step ${i+1}, total reward: ${totalReward.toFixed(2)}`, 
+                        totalReward > 5 ? 'info' : 'warn');
+                    return;
+                }
+            }
+            log(`Episode timeout, total reward: ${totalReward.toFixed(2)}`, 'warn');
+        }
+        
+        function drawCharts() {
+            // Reward chart
+            const rewardCanvas = document.getElementById('rewardChart');
+            const rctx = rewardCanvas.getContext('2d');
+            rctx.clearRect(0, 0, rewardCanvas.width, rewardCanvas.height);
+            
+            if (rewardHistory.length > 1) {
+                const w = rewardCanvas.width;
+                const h = rewardCanvas.height;
+                const min = Math.min(...rewardHistory);
+                const max = Math.max(...rewardHistory);
+                const range = max - min || 1;
+                
+                // Zero line
+                const zeroY = h - ((0 - min) / range) * (h - 20) - 10;
+                rctx.strokeStyle = '#333';
+                rctx.beginPath();
+                rctx.moveTo(0, zeroY);
+                rctx.lineTo(w, zeroY);
+                rctx.stroke();
+                
+                // Reward curve
+                rctx.strokeStyle = '#4ade80';
+                rctx.lineWidth = 2;
+                rctx.beginPath();
+                rewardHistory.forEach((r, i) => {
+                    const x = (i / (rewardHistory.length - 1)) * w;
+                    const y = h - ((r - min) / range) * (h - 20) - 10;
+                    if (i === 0) rctx.moveTo(x, y);
+                    else rctx.lineTo(x, y);
+                });
+                rctx.stroke();
+            }
+            
+            // Action distribution
+            const actionCanvas = document.getElementById('actionChart');
+            const actx = actionCanvas.getContext('2d');
+            actx.clearRect(0, 0, actionCanvas.width, actionCanvas.height);
+            
+            if (actionHistory.length > 0) {
+                const recent = actionHistory.slice(-200);
+                const w = actionCanvas.width;
+                const h = actionCanvas.height;
+                
+                // Steering histogram
+                actx.fillStyle = '#f87171';
+                const steerBins = new Array(20).fill(0);
+                recent.forEach(a => {
+                    const bin = Math.floor((a[0] + 1) / 2 * 19);
+                    steerBins[Math.max(0, Math.min(19, bin))]++;
+                });
+                const maxBin = Math.max(...steerBins);
+                steerBins.forEach((count, i) => {
+                    const barH = (count / maxBin) * (h - 20);
+                    actx.fillRect(i * 20 + 5, h - barH - 10, 15, barH);
+                });
+                
+                // Throttle histogram  
+                actx.fillStyle = '#4ade80';
+                const throttleBins = new Array(20).fill(0);
+                recent.forEach(a => {
+                    const bin = Math.floor((a[1] + 1) / 2 * 19);
+                    throttleBins[Math.max(0, Math.min(19, bin))]++;
+                });
+                const maxBin2 = Math.max(...throttleBins);
+                throttleBins.forEach((count, i) => {
+                    const barH = (count / maxBin2) * (h - 20);
+                    actx.fillRect(400 + i * 20 + 5, h - barH - 10, 15, barH);
+                });
+                
+                actx.fillStyle = '#888';
+                actx.font = '10px monospace';
+                actx.fillText('Steering', 80, 12);
+                actx.fillText('Throttle', 480, 12);
+            }
+        }
+        
+        function log(msg, type = '') {
+            const logEl = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        
+        // Initialize on load
+        init();
+    </script>
+</body>
+</html>
+
+

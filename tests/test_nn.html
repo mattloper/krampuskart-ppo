@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Neural Network Test</title>
+    <style>
+        body {
+            background: #1a1a2e;
+            color: #eee;
+            font-family: monospace;
+            padding: 20px;
+        }
+        .test-section {
+            background: #16213e;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+        }
+        .pass { color: #4ade80; }
+        .fail { color: #f87171; }
+        canvas {
+            background: #0f0f23;
+            border: 1px solid #333;
+            margin: 10px 0;
+        }
+        button {
+            background: #4a5568;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover { background: #5a6578; }
+        .log { 
+            background: #0d1117; 
+            padding: 10px; 
+            margin: 5px 0;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Neural Network & Car Tests</h1>
+    
+    <div class="test-section">
+        <h2>1. Neural Network Creation</h2>
+        <div id="nn-creation-log" class="log"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. Neural Network Visualization</h2>
+        <div>
+            <button onclick="createRandomNN()">New Random NN</button>
+            <button onclick="createUniformNN()">Uniform Weights (converged)</button>
+            <button onclick="createMixedNN()">Mixed Weights</button>
+        </div>
+        <canvas id="nnCanvas" width="300" height="200"></canvas>
+        <div id="nn-viz-log" class="log"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. Neural Network Prediction</h2>
+        <button onclick="testPrediction()">Test Prediction</button>
+        <div id="nn-predict-log" class="log"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>4. Weighted Average</h2>
+        <button onclick="testWeightedAvg()">Test Weighted Average</button>
+        <div id="nn-avg-log" class="log"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>5. Car Progress Velocity</h2>
+        <button onclick="testProgressVelocity()">Test Progress Velocity</button>
+        <div id="car-progress-log" class="log"></div>
+    </div>
+
+    <script type="module">
+        import { NeuralNetwork } from '../js/neural-network.js';
+        import { CONFIG } from '../js/config.js';
+        
+        const nnCanvas = document.getElementById('nnCanvas');
+        const nnCtx = nnCanvas.getContext('2d');
+        let currentNN = null;
+        
+        function log(elementId, msg, isPass = null) {
+            const el = document.getElementById(elementId);
+            const className = isPass === true ? 'pass' : isPass === false ? 'fail' : '';
+            el.innerHTML += `<div class="${className}">${msg}</div>`;
+        }
+        
+        // Test 1: NN Creation
+        function testNNCreation() {
+            log('nn-creation-log', '--- Testing NN Creation ---');
+            
+            try {
+                // Test with CONFIG values
+                log('nn-creation-log', `CONFIG.NN_INPUT_COUNT = ${CONFIG.NN_INPUT_COUNT}`);
+                log('nn-creation-log', `CONFIG.SENSOR_COUNT = ${CONFIG.SENSOR_COUNT}`);
+                log('nn-creation-log', `CONFIG.HIDDEN_NODES = ${CONFIG.HIDDEN_NODES}`);
+                
+                const nn = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+                
+                log('nn-creation-log', `Created NN with ${nn.inputNodes} inputs, ${nn.hiddenNodes} hidden, ${nn.outputNodes} outputs`);
+                log('nn-creation-log', `weights1 shape: ${nn.weights1.length} x ${nn.weights1[0]?.length}`, 
+                    nn.weights1.length === CONFIG.HIDDEN_NODES && nn.weights1[0]?.length === CONFIG.NN_INPUT_COUNT);
+                log('nn-creation-log', `weights2 shape: ${nn.weights2.length} x ${nn.weights2[0]?.length}`,
+                    nn.weights2.length === 2 && nn.weights2[0]?.length === CONFIG.HIDDEN_NODES);
+                
+                // Check weight ranges
+                const allW1 = nn.weights1.flat();
+                const allW2 = nn.weights2.flat();
+                const minW = Math.min(...allW1, ...allW2);
+                const maxW = Math.max(...allW1, ...allW2);
+                log('nn-creation-log', `Weight range: [${minW.toFixed(3)}, ${maxW.toFixed(3)}]`, minW >= -1 && maxW <= 1);
+                
+                currentNN = nn;
+                nn.draw(nnCtx, nnCanvas.width, nnCanvas.height);
+                
+            } catch (e) {
+                log('nn-creation-log', `ERROR: ${e.message}`, false);
+                console.error(e);
+            }
+        }
+        
+        // Test 2: Visualization
+        window.createRandomNN = function() {
+            currentNN = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            currentNN.draw(nnCtx, nnCanvas.width, nnCanvas.height);
+            
+            const stats = currentNN.getWeightStats ? currentNN.getWeightStats() : { mean: 'N/A', std: 'N/A' };
+            log('nn-viz-log', `Random NN - mean: ${stats.mean?.toFixed(4) || 'N/A'}, std: ${stats.std?.toFixed(4) || 'N/A'}`);
+        };
+        
+        window.createUniformNN = function() {
+            // Create NN with near-uniform weights (simulates converged state)
+            currentNN = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            // Set all weights to ~0.1 with tiny variance
+            currentNN.weights1 = currentNN.weights1.map(row => row.map(() => 0.1 + Math.random() * 0.01));
+            currentNN.weights2 = currentNN.weights2.map(row => row.map(() => 0.1 + Math.random() * 0.01));
+            currentNN.draw(nnCtx, nnCanvas.width, nnCanvas.height);
+            
+            const allW = [...currentNN.weights1.flat(), ...currentNN.weights2.flat()];
+            const mean = allW.reduce((a, b) => a + b) / allW.length;
+            const std = Math.sqrt(allW.reduce((a, b) => a + (b - mean) ** 2, 0) / allW.length);
+            log('nn-viz-log', `Uniform NN - mean: ${mean.toFixed(4)}, std: ${std.toFixed(6)} (should still show green lines)`);
+        };
+        
+        window.createMixedNN = function() {
+            currentNN = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            // Set weights to clear positive/negative pattern
+            currentNN.weights1 = currentNN.weights1.map((row, i) => 
+                row.map((_, j) => (i + j) % 2 === 0 ? 0.8 : -0.8)
+            );
+            currentNN.weights2 = currentNN.weights2.map((row, i) => 
+                row.map((_, j) => (i + j) % 2 === 0 ? 0.5 : -0.5)
+            );
+            currentNN.draw(nnCtx, nnCanvas.width, nnCanvas.height);
+            log('nn-viz-log', `Mixed NN - alternating +/- weights (should show clear red/green pattern)`);
+        };
+        
+        // Test 3: Prediction
+        window.testPrediction = function() {
+            log('nn-predict-log', '--- Testing Prediction ---');
+            
+            if (!currentNN) {
+                currentNN = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            }
+            
+            // Test with 9 inputs (8 sensors + 1 progress velocity)
+            const inputs = [100, 150, 200, 200, 200, 150, 100, 50, 5]; // 8 sensors + velocity
+            
+            log('nn-predict-log', `Input count: ${inputs.length} (expected: ${CONFIG.NN_INPUT_COUNT})`, 
+                inputs.length === CONFIG.NN_INPUT_COUNT);
+            
+            try {
+                const output = currentNN.predict(inputs);
+                log('nn-predict-log', `Output: [${output.map(v => v.toFixed(4)).join(', ')}]`);
+                log('nn-predict-log', `Output in range [-1, 1]: ${output.every(v => v >= -1 && v <= 1)}`,
+                    output.every(v => v >= -1 && v <= 1));
+            } catch (e) {
+                log('nn-predict-log', `ERROR: ${e.message}`, false);
+                console.error(e);
+            }
+        };
+        
+        // Test 4: Weighted Average
+        window.testWeightedAvg = function() {
+            log('nn-avg-log', '--- Testing Weighted Average ---');
+            
+            const nn1 = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            const nn2 = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            const nn3 = new NeuralNetwork(CONFIG.NN_INPUT_COUNT, CONFIG.HIDDEN_NODES, 2);
+            
+            log('nn-avg-log', `NN1 inputNodes: ${nn1.inputNodes}`);
+            log('nn-avg-log', `NN2 inputNodes: ${nn2.inputNodes}`);
+            log('nn-avg-log', `NN3 inputNodes: ${nn3.inputNodes}`);
+            
+            try {
+                const avg = NeuralNetwork.weightedAverage([nn1, nn2, nn3], [0.5, 0.3, 0.2]);
+                
+                log('nn-avg-log', `Averaged NN inputNodes: ${avg.inputNodes}`, avg.inputNodes === CONFIG.NN_INPUT_COUNT);
+                log('nn-avg-log', `Averaged weights1 shape: ${avg.weights1.length} x ${avg.weights1[0]?.length}`,
+                    avg.weights1.length === CONFIG.HIDDEN_NODES && avg.weights1[0]?.length === CONFIG.NN_INPUT_COUNT);
+                
+                // Verify averaging is correct for a sample weight
+                const w1_00_expected = nn1.weights1[0][0] * 0.5 + nn2.weights1[0][0] * 0.3 + nn3.weights1[0][0] * 0.2;
+                const w1_00_actual = avg.weights1[0][0];
+                const diff = Math.abs(w1_00_expected - w1_00_actual);
+                log('nn-avg-log', `Sample weight avg correct: ${diff.toFixed(6)} < 0.0001`, diff < 0.0001);
+                
+                currentNN = avg;
+                avg.draw(nnCtx, nnCanvas.width, nnCanvas.height);
+                
+            } catch (e) {
+                log('nn-avg-log', `ERROR: ${e.message}`, false);
+                console.error(e);
+            }
+        };
+        
+        // Test 5: Progress Velocity simulation
+        window.testProgressVelocity = function() {
+            log('car-progress-log', '--- Testing Progress Velocity ---');
+            
+            // Simulate progress changes
+            const testCases = [
+                { lastProgress: 0.5, progress: 0.51, expected: 0.01, desc: 'Normal forward' },
+                { lastProgress: 0.5, progress: 0.49, expected: -0.01, desc: 'Normal backward' },
+                { lastProgress: 0.95, progress: 0.05, expected: 0.10, desc: 'Wrap forward (lap complete)' },
+                { lastProgress: 0.05, progress: 0.95, expected: -0.10, desc: 'Wrap backward' },
+                { lastProgress: 0, progress: 0.95, expected: -0.05, desc: 'From start, moved backward' },
+            ];
+            
+            for (const tc of testCases) {
+                let delta = tc.progress - tc.lastProgress;
+                if (delta > 0.5) delta -= 1;
+                if (delta < -0.5) delta += 1;
+                
+                const pass = Math.abs(delta - tc.expected) < 0.001;
+                log('car-progress-log', `${tc.desc}: last=${tc.lastProgress}, curr=${tc.progress}, delta=${delta.toFixed(3)} (expected ${tc.expected})`, pass);
+            }
+        };
+        
+        // Run initial tests
+        testNNCreation();
+    </script>
+</body>
+</html>
+

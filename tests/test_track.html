@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Test</title>
+    <style>
+        body {
+            margin: 0;
+            background: #050a14;
+            font-family: system-ui, sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 13px;
+            max-width: 300px;
+        }
+        #info h3 { margin: 0 0 8px 0; color: #4ecdc4; }
+        #info p { margin: 4px 0; }
+        .value { color: #ffd93d; font-family: monospace; }
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px 15px;
+            border-radius: 8px;
+        }
+        label { display: block; margin: 5px 0; cursor: pointer; }
+        input[type="checkbox"] { margin-right: 8px; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">
+        <h3>Track Test</h3>
+        <p>Click anywhere to query SDF</p>
+        <p>Mouse: <span id="mousePos" class="value">—</span></p>
+        <p>Distance to road: <span id="sdfValue" class="value">—</span></p>
+        <p>Progress (t): <span id="progressValue" class="value">—</span></p>
+        <p>On road: <span id="onRoad" class="value">—</span></p>
+    </div>
+    <div id="controls">
+        <label><input type="checkbox" id="showHeatmap"> Show SDF Heatmap</label>
+        <label><input type="checkbox" id="showWalls"> Show Wall Segments</label>
+        <label><input type="checkbox" id="showSamples" checked> Show Centerline</label>
+    </div>
+    
+    <script type="module">
+        import { Track } from '../js/track.js';
+        
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Track centerline - similar feel to original but as spline
+        const trackCenterline = [
+            { x: 200, y: -25 },
+            { x: 550, y: -25 },
+            { x: 875, y: -25 },
+            { x: 1150, y: 300 },
+            { x: 975, y: 650 },
+            { x: 1225, y: 775 },
+            { x: 1300, y: 1025 },
+            { x: 950, y: 1300 },
+            { x: 550, y: 1250 },
+            { x: 450, y: 1075 },
+            { x: 300, y: 1100 },
+            { x: 75, y: 1300 },
+            { x: -425, y: 1125 },
+            { x: -475, y: 625 },
+            { x: -150, y: 600 },
+            { x: -350, y: 400 },
+            { x: -50, y: 100 },
+        ];
+        
+        let track = new Track(trackCenterline);
+        let camera = { x: 400, y: 400 };
+        let mouseWorld = { x: 0, y: 0 };
+        let heatmapImage = null;
+        
+        // UI elements
+        const mousePos = document.getElementById('mousePos');
+        const sdfValue = document.getElementById('sdfValue');
+        const progressValue = document.getElementById('progressValue');
+        const onRoad = document.getElementById('onRoad');
+        const showHeatmap = document.getElementById('showHeatmap');
+        const showWalls = document.getElementById('showWalls');
+        const showSamples = document.getElementById('showSamples');
+        
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            heatmapImage = null; // Invalidate cache
+            draw();
+        }
+        
+        function screenToWorld(sx, sy) {
+            return {
+                x: sx - canvas.width/2 + camera.x,
+                y: sy - canvas.height/2 + camera.y
+            };
+        }
+        
+        function worldToScreen(wx, wy) {
+            return {
+                x: wx - camera.x + canvas.width/2,
+                y: wy - camera.y + canvas.height/2
+            };
+        }
+        
+        function generateHeatmap() {
+            const step = 8; // Resolution
+            const imgWidth = Math.ceil(canvas.width / step);
+            const imgHeight = Math.ceil(canvas.height / step);
+            
+            const imageData = ctx.createImageData(imgWidth, imgHeight);
+            
+            for (let sy = 0; sy < imgHeight; sy++) {
+                for (let sx = 0; sx < imgWidth; sx++) {
+                    const world = screenToWorld(sx * step, sy * step);
+                    const dist = track.distanceToRoad(world.x, world.y);
+                    
+                    const idx = (sy * imgWidth + sx) * 4;
+                    
+                    if (dist <= 0) {
+                        // On road: green, darker further from edge
+                        const intensity = Math.min(1, -dist / 100);
+                        imageData.data[idx] = 0;
+                        imageData.data[idx + 1] = Math.floor(80 + intensity * 40);
+                        imageData.data[idx + 2] = 0;
+                        imageData.data[idx + 3] = 100;
+                    } else {
+                        // Off road: red, brighter closer to edge
+                        const intensity = Math.max(0, 1 - dist / 200);
+                        imageData.data[idx] = Math.floor(intensity * 200);
+                        imageData.data[idx + 1] = 0;
+                        imageData.data[idx + 2] = 0;
+                        imageData.data[idx + 3] = Math.floor(intensity * 150);
+                    }
+                }
+            }
+            
+            // Create scaled image
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = imgWidth;
+            tempCanvas.height = imgHeight;
+            tempCanvas.getContext('2d').putImageData(imageData, 0, 0);
+            
+            heatmapImage = tempCanvas;
+        }
+        
+        function draw() {
+            ctx.fillStyle = '#050a14';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            ctx.translate(canvas.width/2 - camera.x, canvas.height/2 - camera.y);
+            
+            // Draw heatmap if enabled
+            if (showHeatmap.checked) {
+                if (!heatmapImage) generateHeatmap();
+                ctx.save();
+                ctx.resetTransform();
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(heatmapImage, 0, 0, canvas.width, canvas.height);
+                ctx.restore();
+            }
+            
+            // Draw track
+            track.draw(ctx);
+            
+            // Draw wall segments if enabled
+            if (showWalls.checked) {
+                ctx.strokeStyle = 'rgba(255, 100, 100, 0.5)';
+                ctx.lineWidth = 1;
+                const walls = track.getWalls();
+                for (const wall of walls) {
+                    ctx.beginPath();
+                    ctx.moveTo(wall.p1.x, wall.p1.y);
+                    ctx.lineTo(wall.p2.x, wall.p2.y);
+                    ctx.stroke();
+                }
+            }
+            
+            // Draw samples if enabled
+            if (showSamples.checked) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                const samples = track.getSamples();
+                for (const s of samples) {
+                    ctx.beginPath();
+                    ctx.arc(s.point.x, s.point.y, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            
+            // Draw mouse cursor indicator
+            ctx.beginPath();
+            ctx.arc(mouseWorld.x, mouseWorld.y, 8, 0, Math.PI * 2);
+            ctx.fillStyle = track.isOnRoad(mouseWorld.x, mouseWorld.y) ? '#4ecdc4' : '#ff6b6b';
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // Draw line to closest point on centerline
+            const closest = track.getClosestPoint(mouseWorld.x, mouseWorld.y);
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.setLineDash([5, 5]);
+            ctx.moveTo(mouseWorld.x, mouseWorld.y);
+            ctx.lineTo(closest.point.x, closest.point.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            ctx.restore();
+        }
+        
+        function updateInfo() {
+            const dist = track.distanceToRoad(mouseWorld.x, mouseWorld.y);
+            const progress = track.getProgress(mouseWorld.x, mouseWorld.y);
+            const on = track.isOnRoad(mouseWorld.x, mouseWorld.y);
+            
+            mousePos.textContent = `${Math.round(mouseWorld.x)}, ${Math.round(mouseWorld.y)}`;
+            sdfValue.textContent = `${dist.toFixed(1)}px`;
+            sdfValue.style.color = dist <= 0 ? '#4ecdc4' : '#ff6b6b';
+            progressValue.textContent = progress.toFixed(3);
+            onRoad.textContent = on ? 'YES' : 'NO';
+            onRoad.style.color = on ? '#4ecdc4' : '#ff6b6b';
+        }
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseWorld = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+            updateInfo();
+            draw();
+        });
+        
+        // Pan with drag
+        let dragging = false;
+        let lastMouse = { x: 0, y: 0 };
+        
+        canvas.addEventListener('mousedown', (e) => {
+            dragging = true;
+            lastMouse = { x: e.clientX, y: e.clientY };
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            if (dragging) {
+                camera.x -= e.clientX - lastMouse.x;
+                camera.y -= e.clientY - lastMouse.y;
+                lastMouse = { x: e.clientX, y: e.clientY };
+                heatmapImage = null; // Invalidate cache on pan
+                draw();
+            }
+        });
+        
+        canvas.addEventListener('mouseup', () => dragging = false);
+        canvas.addEventListener('mouseleave', () => dragging = false);
+        
+        // Checkbox handlers
+        showHeatmap.addEventListener('change', () => { heatmapImage = null; draw(); });
+        showWalls.addEventListener('change', draw);
+        showSamples.addEventListener('change', draw);
+        
+        window.addEventListener('resize', resize);
+        resize();
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test: PPO Diagnostics</title>
+    <style>
+        body {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            margin: 0;
+            display: flex;
+        }
+        #game-container {
+            flex: 1;
+            position: relative;
+        }
+        canvas {
+            display: block;
+        }
+        #diagnostics {
+            width: 400px;
+            padding: 15px;
+            background: #111;
+            height: 100vh;
+            overflow-y: auto;
+            box-sizing: border-box;
+        }
+        h2 { color: #f87171; margin: 15px 0 10px 0; font-size: 14px; }
+        .section {
+            background: #1a1a1a;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 6px;
+        }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            border-bottom: 1px solid #222;
+        }
+        .row:last-child { border-bottom: none; }
+        .label { color: #888; }
+        .value { color: #4ade80; font-weight: bold; }
+        .warning { color: #facc15; }
+        .danger { color: #f87171; }
+        .bar-container {
+            height: 20px;
+            background: #222;
+            border-radius: 3px;
+            margin: 3px 0;
+            position: relative;
+            overflow: hidden;
+        }
+        .bar {
+            height: 100%;
+            transition: width 0.1s;
+        }
+        .bar-label {
+            position: absolute;
+            left: 5px;
+            top: 2px;
+            font-size: 11px;
+            color: #fff;
+        }
+        .sensor-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 5px;
+        }
+        .sensor-item {
+            background: #222;
+            padding: 5px;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 11px;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        button {
+            background: #f87171;
+            color: #000;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        button:hover { background: #fca5a5; }
+        .help {
+            font-size: 11px;
+            color: #666;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+    <div id="diagnostics">
+        <h2>🔍 PPO DIAGNOSTICS</h2>
+        <div class="controls">
+            <button onclick="toggleManual()">Toggle Manual Control</button>
+            <button onclick="resetCar()">Reset Car</button>
+        </div>
+        <p id="mode" style="color: #facc15;">Mode: AI Control</p>
+        
+        <h2>PROGRESS</h2>
+        <div class="section" id="progress-section"></div>
+        
+        <h2>TIME-TO-COLLISION</h2>
+        <div class="section" id="ttc-section"></div>
+        
+        <h2>REWARD BREAKDOWN</h2>
+        <div class="section" id="reward-section"></div>
+        
+        <h2>SENSOR VALUES</h2>
+        <div class="section sensor-grid" id="sensor-section"></div>
+        
+        <h2>CAR STATE</h2>
+        <div class="section" id="car-section"></div>
+        
+        <div class="help">
+            <p><strong>WASD</strong> - Manual control (when enabled)</p>
+            <p><strong>TRUE TTC</strong> = distance / velocity_toward_sensor</p>
+            <p>Side sensors (L90°, R90°) have TTC=∞ when moving forward (N/A)</p>
+            <p><strong>Green</strong> = contributing sensors (car moving toward)</p>
+            <p><strong>Gray</strong> = non-contributing (moving parallel/away)</p>
+        </div>
+    </div>
+
+    <script type="module">
+        import { CONFIG } from '../js/config.js';
+        import { Track } from '../js/track.js';
+        import { Car } from '../js/car.js';
+        
+        // Track centerline
+        const TRACK_CENTERLINE = [
+            { x: 200, y: -25 },
+            { x: 550, y: -25 },
+            { x: 875, y: -25 },
+            { x: 1150, y: 300 },
+            { x: 975, y: 650 },
+            { x: 1225, y: 775 },
+            { x: 1300, y: 1025 },
+            { x: 950, y: 1300 },
+            { x: 550, y: 1250 },
+            { x: 450, y: 1075 },
+            { x: 300, y: 1100 },
+            { x: 75, y: 1300 },
+            { x: -425, y: 1125 },
+            { x: -475, y: 625 },
+            { x: -150, y: 600 },
+            { x: -350, y: 400 },
+            { x: -50, y: 100 },
+        ];
+        
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let track, car;
+        let manualControl = false;
+        let keys = {};
+        let prevTotalProgress = 0;
+        let camera = { x: 0, y: 0 };
+        
+        function setup() {
+            canvas.width = window.innerWidth - 400;
+            canvas.height = window.innerHeight;
+            
+            track = new Track(TRACK_CENTERLINE);
+            const start = track.getStartLine();
+            car = new Car(0, start.point.x, start.point.y, Math.atan2(start.tangent.y, start.tangent.x));
+            
+            // Initialize progress
+            car.update(track, []);
+            prevTotalProgress = car.totalProgress;
+            
+            requestAnimationFrame(loop);
+        }
+        
+        function loop() {
+            // Store previous progress
+            const prevProg = car.totalProgress;
+            
+            // Manual or simple AI control
+            if (manualControl) {
+                let steer = 0, throttle = 0;
+                if (keys['a'] || keys['ArrowLeft']) steer = -1;
+                if (keys['d'] || keys['ArrowRight']) steer = 1;
+                if (keys['w'] || keys['ArrowUp']) throttle = 1;
+                if (keys['s'] || keys['ArrowDown']) throttle = -0.5;
+                car.applyAction([steer, throttle]);
+            } else {
+                // Simple AI: go forward, steer towards track
+                const trackDir = track.getTrackDirection(car.x, car.y);
+                const trackAngle = Math.atan2(trackDir.y, trackDir.x);
+                let angleDiff = trackAngle - car.angle;
+                while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+                while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+                
+                const steer = Math.max(-1, Math.min(1, angleDiff * 2));
+                car.applyAction([steer, 0.8]);
+            }
+            
+            car.update(track, []);
+            
+            // Reset if dead
+            if (car.dead) {
+                const start = track.getStartLine();
+                car.reset(start);
+                car.update(track, []);
+            }
+            
+            // Camera follow
+            camera.x += (car.x - camera.x) * 0.1;
+            camera.y += (car.y - camera.y) * 0.1;
+            
+            // Draw
+            ctx.fillStyle = '#050a14';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save();
+            ctx.translate(canvas.width / 2 - camera.x, canvas.height / 2 - camera.y);
+            
+            track.draw(ctx);
+            drawCarWithDiagnostics(ctx, car);
+            
+            ctx.restore();
+            
+            // Update diagnostics
+            updateDiagnostics(car, prevProg);
+            
+            requestAnimationFrame(loop);
+        }
+        
+        function drawCarWithDiagnostics(ctx, car) {
+            const speed = Math.max(car.speed, 0.1);
+            const ppo = CONFIG.PPO;
+            
+            // Draw TTC danger zones for each sensor
+            car.sensors.forEach((dist, i) => {
+                const angle = getSensorAngle(car, i);
+                
+                // Get sensor angle relative to car heading (local)
+                const sensorAngle = (i < 7) 
+                    ? -Math.PI/2 + (i / 6) * Math.PI 
+                    : Math.PI;
+                
+                // Velocity component toward this sensor
+                const velocityToward = speed * Math.cos(sensorAngle);
+                const contributing = velocityToward > 0.1;
+                const trueTTC = contributing ? dist / velocityToward : Infinity;
+                const inDanger = contributing && trueTTC < ppo.TTC_THRESHOLD;
+                
+                // Draw sensor line
+                ctx.beginPath();
+                if (inDanger) {
+                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.9)';
+                    ctx.lineWidth = 3;
+                } else if (contributing) {
+                    ctx.strokeStyle = 'rgba(100, 255, 100, 0.5)';
+                    ctx.lineWidth = 2;
+                } else {
+                    ctx.strokeStyle = 'rgba(100, 100, 100, 0.2)';
+                    ctx.lineWidth = 1;
+                }
+                ctx.moveTo(car.x, car.y);
+                ctx.lineTo(car.x + Math.cos(angle) * dist, car.y + Math.sin(angle) * dist);
+                ctx.stroke();
+                
+                // Draw TTC label for dangerous sensors
+                if (inDanger) {
+                    const labelX = car.x + Math.cos(angle) * (dist / 2);
+                    const labelY = car.y + Math.sin(angle) * (dist / 2);
+                    ctx.fillStyle = '#f87171';
+                    ctx.font = '12px monospace';
+                    ctx.fillText(`TTC:${trueTTC.toFixed(1)}`, labelX, labelY);
+                }
+            });
+            
+            // Draw car
+            ctx.save();
+            ctx.translate(car.x, car.y);
+            ctx.rotate(car.angle);
+            ctx.fillStyle = car.dead ? '#666' : '#ff4444';
+            ctx.beginPath();
+            ctx.roundRect(-15, -9, 30, 18, 4);
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.restore();
+            
+            // Draw track direction indicator
+            const trackDir = track.getTrackDirection(car.x, car.y);
+            if (trackDir) {
+                ctx.beginPath();
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                ctx.moveTo(car.x, car.y);
+                ctx.lineTo(car.x + trackDir.x * 50, car.y + trackDir.y * 50);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+        
+        function getSensorAngle(car, i) {
+            return (i < 7)
+                ? car.angle - Math.PI / 2 + (i / 6) * Math.PI
+                : car.angle + Math.PI;
+        }
+        
+        function updateDiagnostics(car, prevProg) {
+            const speed = Math.max(car.speed, 0.5);
+            const ppo = CONFIG.PPO;
+            
+            // Progress section - use progressVelocity which is computed during update
+            const deltaProgress = car.progressVelocity;  // This is set in car.update()
+            const progressReward = deltaProgress * ppo.PROGRESS_REWARD_SCALE;
+            
+            document.getElementById('progress-section').innerHTML = `
+                <div class="row">
+                    <span class="label">Total Progress</span>
+                    <span class="value">${car.totalProgress.toFixed(4)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Delta Progress</span>
+                    <span class="value">${deltaProgress.toFixed(6)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Progress Reward</span>
+                    <span class="value">${progressReward.toFixed(4)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Est. Reward/sec (60fps)</span>
+                    <span class="value">${(progressReward * 60).toFixed(2)}</span>
+                </div>
+            `;
+            
+            // TTC section - use TRUE TTC (velocity component toward sensor)
+            let ttcHtml = '';
+            let totalTTCPenalty = 0;
+            let dangerCount = 0;
+            let minTrueTTC = Infinity;
+            
+            car.sensors.forEach((dist, i) => {
+                // Get sensor angle relative to car heading
+                const sensorAngle = (i < 7) 
+                    ? -Math.PI/2 + (i / 6) * Math.PI 
+                    : Math.PI;
+                
+                // Velocity component toward this sensor
+                const velocityToward = speed * Math.cos(sensorAngle);
+                
+                // Only compute TTC if moving toward this direction
+                if (velocityToward > 0.1) {
+                    const ttc = dist / velocityToward;  // TRUE TTC
+                    minTrueTTC = Math.min(minTrueTTC, ttc);
+                    
+                    if (ttc < ppo.TTC_THRESHOLD) {
+                        const normalizedTTC = ttc / ppo.TTC_THRESHOLD;
+                        const penalty = (1 - normalizedTTC) * ppo.TTC_PENALTY_WEIGHT;
+                        totalTTCPenalty += penalty;
+                        dangerCount++;
+                    }
+                }
+            });
+            
+            const minDist = Math.min(...car.sensors);
+            
+            const displayTTC = minTrueTTC === Infinity ? 999 : minTrueTTC;
+            document.getElementById('ttc-section').innerHTML = `
+                <div class="row">
+                    <span class="label">Min Distance</span>
+                    <span class="${minDist < 30 ? 'danger' : minDist < 60 ? 'warning' : 'value'}">${minDist.toFixed(1)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Min TRUE TTC (frames)</span>
+                    <span class="${displayTTC < ppo.TTC_THRESHOLD ? 'danger' : 'value'}">${displayTTC.toFixed(1)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">TTC Threshold</span>
+                    <span class="value">${ppo.TTC_THRESHOLD}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Sensors in Danger</span>
+                    <span class="${dangerCount > 0 ? 'danger' : 'value'}">${dangerCount} / 8</span>
+                </div>
+                <div class="row">
+                    <span class="label">Total TTC Penalty</span>
+                    <span class="danger">-${totalTTCPenalty.toFixed(4)}</span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar" style="width: ${Math.min(100, (displayTTC / 50) * 100)}%; background: ${displayTTC < ppo.TTC_THRESHOLD ? '#f87171' : '#4ade80'};"></div>
+                    <span class="bar-label">True TTC: ${displayTTC.toFixed(1)}</span>
+                </div>
+            `;
+            
+            // Reward section
+            const speedReward = car.speed * ppo.SPEED_REWARD_SCALE;
+            const netReward = progressReward - totalTTCPenalty + speedReward;
+            
+            document.getElementById('reward-section').innerHTML = `
+                <div class="row">
+                    <span class="label">Progress</span>
+                    <span class="value">+${progressReward.toFixed(4)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">TTC Penalty</span>
+                    <span class="danger">-${totalTTCPenalty.toFixed(4)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Speed Bonus</span>
+                    <span class="value">+${speedReward.toFixed(4)}</span>
+                </div>
+                <div class="row" style="font-size: 14px; font-weight: bold;">
+                    <span class="label">NET REWARD</span>
+                    <span class="${netReward >= 0 ? 'value' : 'danger'}">${netReward >= 0 ? '+' : ''}${netReward.toFixed(4)}</span>
+                </div>
+                <div class="bar-container">
+                    <div class="bar" style="width: ${Math.min(100, Math.max(0, (netReward + 0.5) / 1 * 100))}%; background: ${netReward >= 0 ? '#4ade80' : '#f87171'};"></div>
+                    <span class="bar-label">Net: ${netReward.toFixed(4)}</span>
+                </div>
+            `;
+            
+            // Sensor section - show TRUE TTC for each sensor
+            let sensorHtml = '';
+            car.sensors.forEach((dist, i) => {
+                const sensorAngle = (i < 7) 
+                    ? -Math.PI/2 + (i / 6) * Math.PI 
+                    : Math.PI;
+                const velocityToward = speed * Math.cos(sensorAngle);
+                const contributing = velocityToward > 0.1;
+                const trueTTC = contributing ? dist / velocityToward : Infinity;
+                const inDanger = contributing && trueTTC < ppo.TTC_THRESHOLD;
+                
+                const sensorLabels = ['L90°', 'L60°', 'L30°', 'FWD', 'R30°', 'R60°', 'R90°', 'REAR'];
+                sensorHtml += `
+                    <div class="sensor-item" style="background: ${inDanger ? '#4a1010' : contributing ? '#1a2a1a' : '#1a1a1a'};">
+                        <div style="color: ${inDanger ? '#f87171' : contributing ? '#4ade80' : '#666'};">${sensorLabels[i]}</div>
+                        <div>${dist.toFixed(0)}</div>
+                        <div style="font-size: 9px; color: ${contributing ? '#888' : '#444'};">
+                            ${contributing ? `TTC:${trueTTC.toFixed(1)}` : 'N/A'}
+                        </div>
+                    </div>
+                `;
+            });
+            document.getElementById('sensor-section').innerHTML = sensorHtml;
+            
+            // Car section
+            const trackDir = track.getTrackDirection(car.x, car.y);
+            let angleToTrack = 0;
+            if (trackDir) {
+                const trackAngle = Math.atan2(trackDir.y, trackDir.x);
+                angleToTrack = car.angle - trackAngle;
+                while (angleToTrack > Math.PI) angleToTrack -= 2 * Math.PI;
+                while (angleToTrack < -Math.PI) angleToTrack += 2 * Math.PI;
+            }
+            
+            document.getElementById('car-section').innerHTML = `
+                <div class="row">
+                    <span class="label">Speed</span>
+                    <span class="value">${car.speed.toFixed(2)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Angle to Track</span>
+                    <span class="${Math.abs(angleToTrack) > 0.5 ? 'warning' : 'value'}">${(angleToTrack * 180 / Math.PI).toFixed(1)}°</span>
+                </div>
+                <div class="row">
+                    <span class="label">Position</span>
+                    <span class="value">${car.x.toFixed(0)}, ${car.y.toFixed(0)}</span>
+                </div>
+                <div class="row">
+                    <span class="label">Dead</span>
+                    <span class="${car.dead ? 'danger' : 'value'}">${car.dead ? 'YES' : 'No'}</span>
+                </div>
+            `;
+        }
+        
+        window.toggleManual = function() {
+            manualControl = !manualControl;
+            document.getElementById('mode').textContent = 
+                `Mode: ${manualControl ? 'Manual Control (WASD)' : 'AI Control'}`;
+            document.getElementById('mode').style.color = manualControl ? '#4ade80' : '#facc15';
+        };
+        
+        window.resetCar = function() {
+            const start = track.getStartLine();
+            car.reset(start);
+            car.update(track, []);
+        };
+        
+        window.addEventListener('keydown', e => keys[e.key] = true);
+        window.addEventListener('keyup', e => keys[e.key] = false);
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth - 400;
+            canvas.height = window.innerHeight;
+        });
+        
+        setup();
+    </script>
+</body>
+</html>
+
