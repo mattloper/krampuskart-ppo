@@ -4,24 +4,41 @@ A browser-based reinforcement learning demo where neural network-controlled cars
 
 ![Krampus Kart](https://img.shields.io/badge/RL-PPO-blue) ![TensorFlow.js](https://img.shields.io/badge/TensorFlow.js-2.x-orange) ![Vanilla JS](https://img.shields.io/badge/JS-Vanilla-yellow)
 
-## 🎯 PPO's Key Innovation: The Clipped Objective
+## 🎯 PPO's Key Innovations
 
-PPO's main contribution ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) is a simple way to prevent destructively large policy updates. The key equation is:
+PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) solves a fundamental problem: **standard policy gradient can only do ONE update per data sample**. If you try multiple updates, the policy changes too much and learning explodes.
 
+PPO enables **multiple epochs of minibatch updates** on the same data by:
+
+### 1. The Clipped Surrogate Objective
 ```
 L^CLIP(θ) = E_t[ min( r_t(θ) · Â_t,  clip(r_t(θ), 1-ε, 1+ε) · Â_t ) ]
 ```
 
-Where:
 - **r_t(θ)** = π_new(a|s) / π_old(a|s) — how much the policy changed
 - **ε** = 0.1 — the clip range (prevents ratio from going outside [0.9, 1.1])
 - **Â_t** = advantage — "was this action better than expected?"
 
-**Why it matters:** Without clipping, policy gradient can make huge updates that break learning. PPO clips the objective so that even if the optimizer *wants* to make a big change, the gradient is zeroed out when the ratio strays too far from 1.
+The clipping zeroes out gradients when the policy tries to change too much, keeping updates "proximal" (close) to the old policy.
 
-### 📍 Where to find it in the code
+### 2. Multiple Epochs on Same Data
+Unlike vanilla policy gradient (1 update per sample), PPO reuses collected experience for **K epochs** of minibatch SGD. This dramatically improves sample efficiency.
 
-**[`js/ppo/ppo-agent.js`](js/ppo/ppo-agent.js) lines 114-120:**
+### 3. Simple First-Order Optimization  
+TRPO (PPO's predecessor) required complex conjugate gradient optimization. PPO achieves similar stability with plain Adam optimizer.
+
+---
+
+### 📍 Where to find these in the code
+
+| Innovation | Location |
+|------------|----------|
+| **Clipped objective** | [`ppo-agent.js` lines 114-120](js/ppo/ppo-agent.js) |
+| **Multiple epochs** | [`ppo-agent.js` line 66](js/ppo/ppo-agent.js): `for (let epoch = 0; epoch < EPOCHS_PER_UPDATE...)` |
+| **ε (clip range)** | [`config.js`](js/config.js): `CLIP_EPSILON: 0.1` |
+| **K (epochs)** | [`config.js`](js/config.js): `EPOCHS_PER_UPDATE: 10` |
+
+**The clipping code:**
 ```javascript
 const ratio = tf.exp(tf.sub(newLogProbs, oldLogProbs));  // r_t(θ)
 const surr1 = tf.mul(ratio, advantages);                 // r_t · Â_t
@@ -29,8 +46,6 @@ const clippedRatio = tf.clipByValue(ratio, 1 - ε, 1 + ε);// clip(r_t, 1-ε, 1+
 const surr2 = tf.mul(clippedRatio, advantages);          // clipped · Â_t
 const policyLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2))); // min(...)
 ```
-
-The clip epsilon (`ε = 0.1`) is set in **[`js/config.js`](js/config.js)** as `CLIP_EPSILON`.
 
 ---
 
