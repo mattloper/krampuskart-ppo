@@ -21,41 +21,14 @@ PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) enables **multip
 
 ### 1. The Clipped Surrogate Objective
 
-The full equation:
+$$L^{CLIP}(\theta) = \mathbb{E}_t \left[ \min \left( r_t \hat{A}_t, \quad \text{clip}(r_t, 1-\epsilon, 1+\epsilon) \hat{A}_t \right) \right]$$
 
-$$L^{CLIP}(\theta) = \mathbb{E}_t \left[ \min \left( r_t(\theta) \hat{A}_t, \; \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) \hat{A}_t \right) \right]$$
+Where:
+- $r_t = \frac{\pi_{new}(a|s)}{\pi_{old}(a|s)}$ — how much the action's probability changed (1.0 = no change)
+- $\hat{A}_t$ — advantage: "was this action better than expected?"
+- $\epsilon = 0.1$ — clip range, so ratio stays in $[0.9, 1.1]$
 
-Let's break it down piece by piece:
-
-#### Step 1: Compute the probability ratio
-
-$$r_t(\theta) = \frac{\pi_{new}(a|s)}{\pi_{old}(a|s)}$$
-
-This measures how much more (or less) likely the new policy is to take action $a$ compared to the old policy. If $r = 1$, the policy hasn't changed. If $r = 2$, the new policy is twice as likely to take that action.
-
-#### Step 2: Compute the advantage
-
-$\hat{A}_t$ answers: "Was this action better or worse than expected?"
-- Positive advantage → action was better than average
-- Negative advantage → action was worse than average
-
-#### Step 3: The unclipped term
-
-$$r_t(\theta) \cdot \hat{A}_t$$
-
-This is the standard policy gradient objective. If an action was good (positive advantage), we want to increase its probability (make $r > 1$).
-
-#### Step 4: The clipped term
-
-$$\text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon) \cdot \hat{A}_t$$
-
-Same thing, but the ratio is clamped to $[0.9, 1.1]$ (with $\epsilon = 0.1$). This limits how much credit/blame we give.
-
-#### Step 5: Take the minimum
-
-$$\min(\text{unclipped}, \text{clipped})$$
-
-This is the key insight: we take the **pessimistic** (lower) estimate. If the policy wants to change a lot, the clipped term will be smaller, limiting the update.
+**How it works:** We compute two terms—the regular surrogate ($r \cdot A$) and a clipped version where $r$ can't go outside $[0.9, 1.1]$. Then we take the **minimum**, which is pessimistic: it prevents the policy from getting too much credit for big changes.
 
 ### 2. Multiple Epochs on Same Data
 Unlike vanilla policy gradient (1 update per sample), PPO reuses collected experience for **K epochs** of minibatch SGD. This dramatically improves sample efficiency.
