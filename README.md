@@ -6,9 +6,18 @@ A browser-based reinforcement learning demo where neural network-controlled cars
 
 ## 🎯 PPO's Key Innovations
 
-PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) solves a fundamental problem: **standard policy gradient can only do ONE update per data sample**. If you try multiple updates, the policy changes too much and learning explodes.
+### Background: Actor-Critic
+PPO uses an **actor-critic** architecture:
+- **Actor** (policy network): decides what action to take given a state
+- **Critic** (value network): predicts expected future reward from a state
 
-PPO enables **multiple epochs of minibatch updates** on the same data by:
+The actor is trained using **policy gradient** — we collect experience, compute which actions were better than expected (advantages), and nudge the policy toward good actions.
+
+### The Problem: Overtraining
+With standard policy gradient, you collect a batch of experience and do **one** gradient update. If you try to reuse that same batch for multiple updates, you're essentially overtraining on stale data — the policy drifts far from the one that collected the data, making the updates invalid.
+
+### PPO's Solution
+PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) enables **multiple epochs** of updates on the same batch by clipping the objective. This prevents the policy from changing too much, keeping it "proximal" to the old policy that collected the data.
 
 ### 1. The Clipped Surrogate Objective
 ```
