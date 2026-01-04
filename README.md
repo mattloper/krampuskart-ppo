@@ -4,14 +4,45 @@ A browser-based reinforcement learning demo where neural network-controlled cars
 
 ![Krampus Kart](https://img.shields.io/badge/RL-PPO-blue) ![TensorFlow.js](https://img.shields.io/badge/TensorFlow.js-2.x-orange) ![Vanilla JS](https://img.shields.io/badge/JS-Vanilla-yellow)
 
-## Quick Start
+## 🎯 PPO's Key Innovation: The Clipped Objective
 
-```bash
-./server.sh start
-# Open http://localhost:8080/index.html
+PPO's main contribution ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) is a simple way to prevent destructively large policy updates. The key equation is:
+
+```
+L^CLIP(θ) = E_t[ min( r_t(θ) · Â_t,  clip(r_t(θ), 1-ε, 1+ε) · Â_t ) ]
 ```
 
-To stop: `./server.sh stop`
+Where:
+- **r_t(θ)** = π_new(a|s) / π_old(a|s) — how much the policy changed
+- **ε** = 0.1 — the clip range (prevents ratio from going outside [0.9, 1.1])
+- **Â_t** = advantage — "was this action better than expected?"
+
+**Why it matters:** Without clipping, policy gradient can make huge updates that break learning. PPO clips the objective so that even if the optimizer *wants* to make a big change, the gradient is zeroed out when the ratio strays too far from 1.
+
+### 📍 Where to find it in the code
+
+**[`js/ppo/ppo-agent.js`](js/ppo/ppo-agent.js) lines 114-120:**
+```javascript
+const ratio = tf.exp(tf.sub(newLogProbs, oldLogProbs));  // r_t(θ)
+const surr1 = tf.mul(ratio, advantages);                 // r_t · Â_t
+const clippedRatio = tf.clipByValue(ratio, 1 - ε, 1 + ε);// clip(r_t, 1-ε, 1+ε)
+const surr2 = tf.mul(clippedRatio, advantages);          // clipped · Â_t
+const policyLoss = tf.neg(tf.mean(tf.minimum(surr1, surr2))); // min(...)
+```
+
+The clip epsilon (`ε = 0.1`) is set in **[`js/config.js`](js/config.js)** as `CLIP_EPSILON`.
+
+---
+
+## 🚀 Try It Live
+
+**[https://mattloper.github.io/krampuskart-ppo/](https://mattloper.github.io/krampuskart-ppo/)**
+
+Or run locally:
+```bash
+python3 -m http.server 8080
+# Open http://localhost:8080
+```
 
 ## What It Does
 
@@ -55,12 +86,12 @@ Over time, cars learn to maximize **forward progress** along the track.
 - Current speed (normalized)
 - Signed angle to track direction (normalized to [-1, 1])
 
-**Architecture:**
-- 1 hidden layer, 32 units
-- GELU activation
-- Actor head: 1 output (steering mean) + learned log-std
-- Critic head: 1 output (state value)
-- Shared backbone between actor and critic
+**Architecture (Separate Networks):**
+- **Actor Network**: Input → 4 hidden units (GELU) → steering mean + learned log-std
+- **Critic Network**: Input → 4 hidden units (GELU) → state value
+- Networks are **separate** (no shared backbone), as recommended by the PPO paper for continuous control
+
+See **[`js/ppo/actor-critic.js`](js/ppo/actor-critic.js)** for implementation.
 
 **Output (1 continuous action):**
 - Steering: relative turn rate [-1, 1] (added to current heading each frame)
@@ -128,10 +159,10 @@ Shows network weights as colored connections using a jet colormap:
 
 ## Car Colors
 
-Cars are colored using a **jet colormap** based on their reward **this step**:
-- 🔴 Red = lowest per-step reward
-- 🟡 Yellow/Green = medium
-- 🔵 Blue = highest per-step reward
+Cars are colored using a **jet colormap** based on their **cumulative episode reward**:
+- 🔴 Red = just spawned (low accumulated reward)
+- 🟡 Yellow/Green = medium progress
+- 🔵 Blue = survived longest / most reward
 
 The leader car (furthest ahead) has a white outline and visible LIDAR beams.
 
@@ -147,31 +178,17 @@ Cars only die from:
 
 There is **no timeout** - cars can take as long as needed.
 
-## Server Management
-
-The `server.sh` script provides robust server management:
-
-```bash
-./server.sh start     # Start on port 8080 with no-cache headers
-./server.sh stop      # Clean shutdown
-./server.sh restart   # Stop then start
-./server.sh status    # Check if running, show PID & port
-```
-
 ## How Learning Works
 
-1. **Pretrain**: Behavioral cloning teaches basic steering (20 epochs)
-2. **Rollout**: 24 cars drive, collecting (state, action, reward, value) for each step
-3. **Complete Episodes**: Only data from finished episodes (crashes) goes to buffer
-4. **Update Trigger**: When buffer reaches 1024 samples, PPO update runs
-5. **Returns**: Compute Monte Carlo returns (actual discounted rewards)
-6. **Advantages**: Compute GAE advantages for policy gradient
-7. **PPO Update**: 
-   - Sample minibatches from buffer
-   - Compute clipped surrogate loss
-   - Update actor (policy) and critic (value) networks
-   - Repeat for 10 epochs
-8. **Repeat**: Clear buffer and continue collecting experience
+| Step | What happens | Code |
+|------|--------------|------|
+| 1. **Pretrain** | Behavioral cloning teaches basic steering | [`actor-critic.js:pretrain()`](js/ppo/actor-critic.js) |
+| 2. **Rollout** | 24 cars drive, collecting (state, action, reward, value) | [`main.js:ppoStep()`](js/main.js) |
+| 3. **Complete Episodes** | Only crashed/finished cars' data goes to buffer | [`main.js:resetFinishedCars()`](js/main.js) |
+| 4. **Returns** | Compute Monte Carlo returns (actual discounted rewards) | [`experience-buffer.js`](js/ppo/experience-buffer.js) |
+| 5. **Advantages** | Compute GAE advantages for policy gradient | [`experience-buffer.js`](js/ppo/experience-buffer.js) |
+| 6. **PPO Update** | **The key part!** Clipped surrogate loss, 10 epochs | [`ppo-agent.js:_updateBatch()`](js/ppo/ppo-agent.js) |
+| 7. **Repeat** | Clear buffer, continue collecting | [`ppo-agent.js:update()`](js/ppo/ppo-agent.js) |
 
 ## Dependencies
 
