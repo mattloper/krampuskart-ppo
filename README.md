@@ -21,14 +21,17 @@ PPO ([Schulman et al., 2017](https://arxiv.org/abs/1707.06347)) enables **multip
 
 ### 1. The Clipped Surrogate Objective
 
-$$L^{CLIP}(\theta) = \mathbb{E}_t \left[ \min \left( r_t \hat{A}_t, \quad \text{clip}(r_t, 1-\epsilon, 1+\epsilon) \hat{A}_t \right) \right]$$
+The goal is to align **r** (how the policy changed) with **A** (whether the action was good):
+- **r** = π_new / π_old — how much more/less likely is this action now? (1.0 = unchanged)
+- **A** = advantage — was this action better or worse than expected?
 
-Where:
-- **r** = π_new / π_old — how much the action's probability changed (1.0 = unchanged)
-- **A** = advantage — "was this action better than expected?"
-- **ε** = 0.1 — clip range, keeps ratio in [0.9, 1.1]
+**The key insight:** Clipping is asymmetric.
+- **When r and A agree** (making good actions more likely, or bad actions less likely): Clipping kicks in at ±10% to prevent overshooting. The direction is right, now add robustness.
+- **When r and A disagree** (making good actions less likely, or bad actions more likely): No clipping. Full gradient to fix the mistake.
 
-**How it works:** We compute two versions of `ratio × advantage`—one normal, one where the ratio is clamped to [0.9, 1.1]. We take the minimum of the two, which prevents the policy from changing too aggressively.
+This lets PPO be aggressive about correcting errors, but conservative about claiming progress.
+
+See [`explainer.md`](explainer.md) for a detailed walkthrough with examples.
 
 ### 2. Multiple Epochs on Same Data
 Unlike vanilla policy gradient (1 update per sample), PPO reuses collected experience for **K epochs** of minibatch SGD. This dramatically improves sample efficiency.
