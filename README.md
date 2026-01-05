@@ -31,8 +31,6 @@ The goal is to align **r** (how the policy changed) with **A** (whether the acti
 
 This lets PPO be aggressive about correcting errors, but conservative about claiming progress.
 
-See [`explainer.md`](explainer.md) for a detailed walkthrough with examples.
-
 ### 2. Multiple Epochs on Same Data
 Unlike vanilla policy gradient (1 update per sample), PPO reuses collected experience for **K epochs** of minibatch SGD. This dramatically improves sample efficiency.
 
@@ -67,78 +65,34 @@ Over time, cars learn to maximize **forward progress** along the track.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Browser                               │
-├─────────────────────────────────────────────────────────────┤
-│  index.html                                                  │
-│  ├── TensorFlow.js (CDN)                                    │
-│  ├── styles.css                                             │
-│  └── js/                                                    │
-│       ├── main.js          ← Game loop, PPO training        │
-│       ├── car.js           ← Car physics, sensors, state    │
-│       ├── track.js         ← Procedural track, SDF, progress│
-│       ├── spline.js        ← Catmull-Rom spline math        │
-│       ├── config.js        ← All hyperparameters            │
-│       ├── ui.js            ← HUD updates                    │
-│       ├── utils.js         ← Helper functions               │
-│       ├── charts.js        ← Avg reward chart               │
-│       ├── nn-visualizer.js ← Neural network weight viz      │
-│       ├── simulation.js    ← Car spawning, camera, helpers  │
-│       ├── debug-logger.js  ← Step & update logging          │
-│       └── ppo/                                              │
-│            ├── actor-critic.js    ← Neural network (TF.js)  │
-│            ├── ppo-agent.js       ← PPO algorithm           │
-│            ├── experience-buffer.js ← Rollout storage, GAE  │
-│            └── reward.js          ← Reward computation      │
-└─────────────────────────────────────────────────────────────┘
-```
+Pure browser-based, no build step:
+- **Simulation**: Car physics, LIDAR sensors, procedural track generation
+- **PPO**: Actor-critic networks in TensorFlow.js, experience buffer, GAE
+- **UI**: Canvas rendering, real-time stats
+
+Key directories: `js/` for game logic, `js/ppo/` for the RL algorithm.
 
 ## Neural Network
 
-**Input (10 dimensions):**
-- 8 LIDAR sensor distances (normalized 0-1, max range 600)
-- Current speed (normalized)
-- Signed angle to track direction (normalized to [-1, 1])
+**Input:** LIDAR sensor distances, speed, and angle to track direction (all normalized).
 
-**Architecture (Separate Networks):**
-- **Actor Network**: Input → 4 hidden units (GELU) → steering mean + learned log-std
-- **Critic Network**: Input → 4 hidden units (GELU) → state value
-- Networks are **separate** (no shared backbone), as recommended by the PPO paper for continuous control
+**Architecture:** Separate actor and critic networks (no shared backbone), as recommended by the PPO paper for continuous control. Small hidden layers with GELU activation.
 
-See **[`js/ppo/actor-critic.js`](js/ppo/actor-critic.js)** for implementation.
+**Output:** Continuous steering action. Throttle is always forward.
 
-**Output (1 continuous action):**
-- Steering: relative turn rate [-1, 1] (added to current heading each frame)
-- Throttle is hardcoded to always forward (1.0)
-
-**Pretraining:**
-Before PPO starts, the network is pretrained with behavioral cloning for 20 epochs to learn a simple policy: counter-steer proportional to angle error.
-
-**Visualization:**
-The neural network weights are visualized in the lower-right corner using a jet colormap (red = negative weights, blue = positive weights).
+**Pretraining:** Before PPO starts, behavioral cloning teaches a simple "counter-steer proportional to angle error" policy.
 
 ## Reward Function
 
-```
-reward = deltaProgress × 500
-```
-
-The reward is simply proportional to forward progress along the track. Clearance, angle alignment, and death penalties are all disabled for simplicity.
+Reward is proportional to forward progress along the track. Simple and sparse — no shaping for clearance, alignment, or death penalties.
 
 ## PPO Hyperparameters
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| `GAMMA` | 0.995 | Discount factor (long horizon) |
-| `GAE_LAMBDA` | 0.95 | Advantage estimation |
-| `CLIP_EPSILON` | 0.1 | Policy clip range |
-| `LEARNING_RATE` | 3e-4 | Adam optimizer LR |
-| `ROLLOUT_LENGTH` | 1024 | Buffer size before update |
-| `EPOCHS_PER_UPDATE` | 10 | PPO epochs per rollout |
-| `BATCH_SIZE` | 64 | Minibatch size |
-| `VALUE_COEF` | 10.0 | Critic loss weight |
-| `ENTROPY_COEF` | 0.01 | Exploration bonus |
+See [`js/config.js`](js/config.js) for all tunable parameters including:
+- Discount factor (γ), GAE lambda (λ)
+- Clip epsilon (ε), learning rate
+- Rollout buffer size, epochs per update, batch size
+- Value and entropy coefficients
 
 ## Complete Episodes Training
 
@@ -148,62 +102,19 @@ Only **complete episodes** (cars that crash or finish a lap) are used for traini
 
 The critic is trained using **Monte Carlo returns** (actual observed discounted rewards) rather than TD(λ) bootstrapped targets. This prevents the circular dependency where bad value predictions create bad training targets.
 
-## UI Indicators
-
-| Indicator | Meaning |
-|-----------|---------|
-| **PPO Updates** | Number of policy updates |
-| **Best Episode** | Highest episode reward seen |
-| **Cars Active** | Cars currently driving (not crashed) |
-| **Avg Reward** | Rolling average of recent episode rewards |
-| **Leader Progress** | Best car's track progress (% of lap) |
-| **Pred / Real / Err** | Critic prediction vs actual discounted return |
-| **Progress Reward** | Average progress reward per episode |
-| **Grads: ✓/✗** | Whether gradients are flowing |
-
-## Visualizations
-
-**Lower Left - Avg Reward Chart:**
-Shows average episode reward over time (green line).
-
-**Lower Right - Neural Network:**
-Shows network weights as colored connections using a jet colormap:
-- 🔴 Red = negative weights
-- 🟢 Green/Yellow = near-zero weights  
-- 🔵 Blue = positive weights
-
-## Car Colors
-
-Cars are colored using a **jet colormap** based on their **cumulative episode reward**:
-- 🔴 Red = just spawned (low accumulated reward)
-- 🟡 Yellow/Green = medium progress
-- 🔵 Blue = survived longest / most reward
-
-The leader car (furthest ahead) has a white outline and visible LIDAR beams.
-
 ## Spawning & Collisions
 
-**Spawning:**
-Cars spawn at random positions near the start line (not in a fixed grid). Spawn positions are validated to be on the track.
-
-**Episode Termination:**
-Cars only die from:
-- **Wall collision** - driving off the track
-- **Car-car collision** - after 60-frame grace period
-
-There is **no timeout** - cars can take as long as needed.
+Cars spawn at random positions near the start line. Episodes end when a car hits a wall or another car. There is no timeout.
 
 ## How Learning Works
 
-| Step | What happens | Code |
-|------|--------------|------|
-| 1. **Pretrain** | Behavioral cloning teaches basic steering | [`actor-critic.js:pretrain()`](js/ppo/actor-critic.js) |
-| 2. **Rollout** | 24 cars drive, collecting (state, action, reward, value) | [`main.js:ppoStep()`](js/main.js) |
-| 3. **Complete Episodes** | Only crashed/finished cars' data goes to buffer | [`main.js:resetFinishedCars()`](js/main.js) |
-| 4. **Returns** | Compute Monte Carlo returns (actual discounted rewards) | [`experience-buffer.js`](js/ppo/experience-buffer.js) |
-| 5. **Advantages** | Compute GAE advantages for policy gradient | [`experience-buffer.js`](js/ppo/experience-buffer.js) |
-| 6. **PPO Update** | **The key part!** Clipped surrogate loss, 10 epochs | [`ppo-agent.js:_updateBatch()`](js/ppo/ppo-agent.js) |
-| 7. **Repeat** | Clear buffer, continue collecting | [`ppo-agent.js:update()`](js/ppo/ppo-agent.js) |
+1. **Pretrain** — Behavioral cloning teaches basic steering before PPO starts
+2. **Rollout** — Cars drive around, collecting (state, action, reward, value) tuples
+3. **Complete Episodes** — Only finished episodes (crashed or lapped) go to the buffer
+4. **Compute Returns** — Monte Carlo returns from actual observed rewards
+5. **Compute Advantages** — GAE for policy gradient
+6. **PPO Update** — Clipped surrogate loss, multiple epochs on same data
+7. **Repeat** — Clear buffer, keep collecting
 
 ## Dependencies
 
